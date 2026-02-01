@@ -102,6 +102,19 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
     const id = body.id || ulid();
     const ts = timestamp || new Date().toISOString();
 
+    // If targeting another agent, resolve their name to ID
+    let resolvedTargetId = targetId;
+    let resolvedTargetType = targetType;
+    if (targetType === 'agent') {
+      const targetAgent = await db.prepare(
+        'SELECT id FROM agents WHERE name = ? OR id = ?'
+      ).bind(targetId, targetId).first<{ id: string }>();
+      
+      if (targetAgent) {
+        resolvedTargetId = targetAgent.id;
+      }
+    }
+
     // Insert journal entry
     await db.prepare(`
       INSERT INTO journal_entries 
@@ -112,8 +125,8 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
       ts,
       agent.id,
       action,
-      targetType,
-      targetId,
+      resolvedTargetType,
+      resolvedTargetId,
       summary,
       body.targetLabel || null,
       body.sessionId || null,
@@ -122,26 +135,29 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
       body.metadata ? JSON.stringify(body.metadata) : null
     ).run();
 
-    // Auto-create/update target in the digital map
-    const targetUlid = ulid();
-    await db.prepare(`
-      INSERT INTO targets (id, type, identifier, name, first_seen, last_seen, interaction_count)
-      VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
-      ON CONFLICT(type, identifier) DO UPDATE SET
-        last_seen = datetime('now'),
-        interaction_count = interaction_count + 1,
-        name = COALESCE(excluded.name, name)
-    `).bind(
-      targetUlid,
-      targetType,
-      targetId,
-      body.targetLabel || null
-    ).run();
+    // Auto-create/update target in the digital map (skip for agent-to-agent, those use agent IDs directly)
+    let target: { id: string } | null = null;
+    if (resolvedTargetType !== 'agent') {
+      const targetUlid = ulid();
+      await db.prepare(`
+        INSERT INTO targets (id, type, identifier, name, first_seen, last_seen, interaction_count)
+        VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
+        ON CONFLICT(type, identifier) DO UPDATE SET
+          last_seen = datetime('now'),
+          interaction_count = interaction_count + 1,
+          name = COALESCE(excluded.name, name)
+      `).bind(
+        targetUlid,
+        resolvedTargetType,
+        resolvedTargetId,
+        body.targetLabel || null
+      ).run();
 
-    // Get the target ID (either new or existing)
-    const target = await db.prepare(
-      'SELECT id FROM targets WHERE type = ? AND identifier = ?'
-    ).bind(targetType, targetId).first<{ id: string }>();
+      // Get the target ID (either new or existing)
+      target = await db.prepare(
+        'SELECT id FROM targets WHERE type = ? AND identifier = ?'
+      ).bind(resolvedTargetType, resolvedTargetId).first<{ id: string }>();
+    }
 
     if (target) {
       // Update agent-target interaction stats

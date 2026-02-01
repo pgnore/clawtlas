@@ -66,12 +66,12 @@ connectionsRoutes.get('/', async (c) => {
     const until = at || new Date().toISOString();
     
     // Get all entries in time window (up to viewTime if specified)
-    // Filter out private target types (person) and agent (shown separately)
+    // Filter out private target types (person)
     let query = `
       SELECT agent_id, action, target_type, target_id, target_label, timestamp
       FROM journal_entries
       WHERE timestamp >= ? AND timestamp <= ?
-      AND target_type NOT IN ('person', 'agent')
+      AND target_type NOT IN ('person')
     `;
     const params: any[] = [since, until];
     
@@ -143,15 +143,28 @@ connectionsRoutes.get('/', async (c) => {
       }
     }
 
-    // Add target nodes
+    // Add target nodes (for agent targets, use the agent ID directly to avoid duplicates)
     for (const conn of connections) {
-      const targetKey = `${conn.targetType}:${conn.target}`;
+      // For agent-to-agent connections, the target is already an agent ID
+      const targetKey = conn.targetType === 'agent' ? conn.target : `${conn.targetType}:${conn.target}`;
+      
+      // Skip if it's an agent we already added
+      if (conn.targetType === 'agent' && nodeSet.has(conn.target)) {
+        continue;
+      }
+      
       if (!nodeSet.has(targetKey)) {
         nodeSet.add(targetKey);
+        
+        // For agent targets, try to get the agent name
+        const label = conn.targetType === 'agent' 
+          ? (agentMap.get(conn.target) || conn.targetLabel || conn.target)
+          : (conn.targetLabel || conn.target);
+        
         nodes.push({
           id: targetKey,
           type: conn.targetType,
-          label: conn.targetLabel || conn.target
+          label
         });
       }
     }
@@ -160,7 +173,8 @@ connectionsRoutes.get('/', async (c) => {
       nodes,
       connections: connections.map(conn => ({
         source: conn.source,
-        target: `${conn.targetType}:${conn.target}`,
+        // For agent-to-agent, target is the agent ID directly
+        target: conn.targetType === 'agent' ? conn.target : `${conn.targetType}:${conn.target}`,
         weight: Math.round(conn.weight * 100) / 100,
         interactions: conn.interactions,
         lastInteraction: conn.lastInteraction
