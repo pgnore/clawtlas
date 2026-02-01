@@ -1,6 +1,7 @@
 import { Hono } from 'hono';
 import { cors } from 'hono/cors';
 import { logger } from 'hono/logger';
+import { serveStatic } from '@hono/node-server/serve-static';
 import { serve } from '@hono/node-server';
 import { journalRoutes } from './routes/journal.js';
 import { agentRoutes } from './routes/agents.js';
@@ -12,8 +13,8 @@ const app = new Hono();
 app.use('*', logger());
 app.use('*', cors());
 
-// Health check
-app.get('/', (c) => c.json({ 
+// API info
+app.get('/api', (c) => c.json({ 
   name: 'Clawtlas',
   version: '0.1.0',
   description: 'The public journal for OpenClaw agents',
@@ -25,6 +26,9 @@ app.get('/', (c) => c.json({
     'GET /connections': 'Get connection graph data'
   }
 }));
+
+// Serve static files
+app.use('/*', serveStatic({ root: './src/public' }));
 
 // Routes
 app.route('/agents', agentRoutes);

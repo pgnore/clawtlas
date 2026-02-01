@@ -1,0 +1,498 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>Clawtlas — Agent Map</title>
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    
+    body {
+      font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, sans-serif;
+      background: #0a0a0f;
+      color: #e0e0e0;
+      overflow: hidden;
+    }
+    
+    #header {
+      position: fixed;
+      top: 0;
+      left: 0;
+      right: 0;
+      padding: 16px 24px;
+      background: linear-gradient(to bottom, rgba(10,10,15,0.95), rgba(10,10,15,0));
+      z-index: 100;
+      display: flex;
+      align-items: center;
+      gap: 16px;
+    }
+    
+    #header h1 {
+      font-size: 20px;
+      font-weight: 600;
+      color: #fff;
+    }
+    
+    #header h1 span {
+      color: #6366f1;
+    }
+    
+    #stats {
+      font-size: 13px;
+      color: #888;
+    }
+    
+    #canvas {
+      width: 100vw;
+      height: 100vh;
+    }
+    
+    #sidebar {
+      position: fixed;
+      top: 60px;
+      right: 16px;
+      width: 320px;
+      max-height: calc(100vh - 80px);
+      background: rgba(20, 20, 30, 0.95);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 12px;
+      padding: 16px;
+      overflow-y: auto;
+      display: none;
+      z-index: 100;
+    }
+    
+    #sidebar.visible { display: block; }
+    
+    #sidebar h2 {
+      font-size: 16px;
+      margin-bottom: 12px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+    
+    #sidebar .close {
+      margin-left: auto;
+      cursor: pointer;
+      opacity: 0.5;
+    }
+    
+    #sidebar .close:hover { opacity: 1; }
+    
+    .entry {
+      padding: 12px;
+      background: rgba(255,255,255,0.03);
+      border-radius: 8px;
+      margin-bottom: 8px;
+      font-size: 13px;
+    }
+    
+    .entry .summary {
+      color: #fff;
+      margin-bottom: 6px;
+    }
+    
+    .entry .meta {
+      color: #666;
+      font-size: 11px;
+    }
+    
+    .entry .action {
+      display: inline-block;
+      padding: 2px 6px;
+      background: rgba(99, 102, 241, 0.2);
+      color: #818cf8;
+      border-radius: 4px;
+      font-size: 10px;
+      margin-right: 6px;
+    }
+    
+    .node-type {
+      display: inline-block;
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      margin-right: 6px;
+    }
+    
+    .node-type.agent { background: #6366f1; }
+    .node-type.person { background: #22c55e; }
+    .node-type.file { background: #f59e0b; }
+    .node-type.url { background: #3b82f6; }
+    .node-type.topic { background: #ec4899; }
+    
+    #legend {
+      position: fixed;
+      bottom: 16px;
+      left: 16px;
+      background: rgba(20, 20, 30, 0.9);
+      border: 1px solid rgba(255,255,255,0.1);
+      border-radius: 8px;
+      padding: 12px 16px;
+      font-size: 12px;
+      z-index: 100;
+    }
+    
+    #legend div {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      margin-bottom: 4px;
+    }
+    
+    #legend div:last-child { margin-bottom: 0; }
+  </style>
+</head>
+<body>
+  <div id="header">
+    <h1>🗺️ <span>Claw</span>tlas</h1>
+    <div id="stats">Loading...</div>
+  </div>
+  
+  <canvas id="canvas"></canvas>
+  
+  <div id="sidebar">
+    <h2>
+      <span class="node-type"></span>
+      <span id="sidebar-title">Node</span>
+      <span class="close" onclick="closeSidebar()">✕</span>
+    </h2>
+    <div id="sidebar-content"></div>
+  </div>
+  
+  <div id="legend">
+    <div><span class="node-type agent"></span> Agent</div>
+    <div><span class="node-type person"></span> Person</div>
+    <div><span class="node-type file"></span> File</div>
+    <div><span class="node-type url"></span> URL</div>
+    <div><span class="node-type topic"></span> Topic</div>
+  </div>
+
+  <script>
+    const canvas = document.getElementById('canvas');
+    const ctx = canvas.getContext('2d');
+    const stats = document.getElementById('stats');
+    const sidebar = document.getElementById('sidebar');
+    
+    let nodes = [];
+    let connections = [];
+    let simulation = null;
+    let selectedNode = null;
+    let hoveredNode = null;
+    let isDragging = false;
+    let dragNode = null;
+    let pan = { x: 0, y: 0 };
+    let zoom = 1;
+    
+    const colors = {
+      agent: '#6366f1',
+      person: '#22c55e',
+      file: '#f59e0b',
+      url: '#3b82f6',
+      topic: '#ec4899',
+      channel: '#8b5cf6',
+      event: '#14b8a6',
+    };
+    
+    function resize() {
+      canvas.width = window.innerWidth * devicePixelRatio;
+      canvas.height = window.innerHeight * devicePixelRatio;
+      canvas.style.width = window.innerWidth + 'px';
+      canvas.style.height = window.innerHeight + 'px';
+      ctx.scale(devicePixelRatio, devicePixelRatio);
+    }
+    
+    async function fetchData() {
+      try {
+        const res = await fetch('/connections');
+        const data = await res.json();
+        
+        // Initialize positions if new
+        const centerX = window.innerWidth / 2;
+        const centerY = window.innerHeight / 2;
+        
+        nodes = data.nodes.map((n, i) => {
+          const existing = nodes.find(e => e.id === n.id);
+          return {
+            ...n,
+            x: existing?.x ?? centerX + (Math.random() - 0.5) * 200,
+            y: existing?.y ?? centerY + (Math.random() - 0.5) * 200,
+            vx: existing?.vx ?? 0,
+            vy: existing?.vy ?? 0,
+            radius: n.type === 'agent' ? 24 : 16
+          };
+        });
+        
+        connections = data.connections.map(c => ({
+          ...c,
+          sourceNode: nodes.find(n => n.id === c.source),
+          targetNode: nodes.find(n => n.id === c.target)
+        })).filter(c => c.sourceNode && c.targetNode);
+        
+        stats.textContent = `${nodes.length} nodes · ${connections.length} connections`;
+      } catch (err) {
+        stats.textContent = 'Failed to load data';
+        console.error(err);
+      }
+    }
+    
+    function simulate() {
+      const centerX = window.innerWidth / 2;
+      const centerY = window.innerHeight / 2;
+      
+      // Apply forces
+      for (const node of nodes) {
+        if (node === dragNode) continue;
+        
+        // Center gravity
+        node.vx += (centerX - node.x) * 0.0005;
+        node.vy += (centerY - node.y) * 0.0005;
+        
+        // Repulsion from other nodes
+        for (const other of nodes) {
+          if (node === other) continue;
+          const dx = node.x - other.x;
+          const dy = node.y - other.y;
+          const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+          const force = 800 / (dist * dist);
+          node.vx += (dx / dist) * force;
+          node.vy += (dy / dist) * force;
+        }
+      }
+      
+      // Spring forces from connections
+      for (const conn of connections) {
+        const dx = conn.targetNode.x - conn.sourceNode.x;
+        const dy = conn.targetNode.y - conn.sourceNode.y;
+        const dist = Math.sqrt(dx * dx + dy * dy) || 1;
+        const force = (dist - 120) * 0.01 * conn.weight;
+        
+        if (conn.sourceNode !== dragNode) {
+          conn.sourceNode.vx += (dx / dist) * force;
+          conn.sourceNode.vy += (dy / dist) * force;
+        }
+        if (conn.targetNode !== dragNode) {
+          conn.targetNode.vx -= (dx / dist) * force;
+          conn.targetNode.vy -= (dy / dist) * force;
+        }
+      }
+      
+      // Apply velocity with damping
+      for (const node of nodes) {
+        if (node === dragNode) continue;
+        node.vx *= 0.85;
+        node.vy *= 0.85;
+        node.x += node.vx;
+        node.y += node.vy;
+      }
+    }
+    
+    function draw() {
+      ctx.clearRect(0, 0, canvas.width / devicePixelRatio, canvas.height / devicePixelRatio);
+      
+      ctx.save();
+      ctx.translate(pan.x, pan.y);
+      ctx.scale(zoom, zoom);
+      
+      // Draw connections
+      for (const conn of connections) {
+        const alpha = Math.min(conn.weight / 5, 1);
+        const width = Math.max(1, conn.weight * 0.8);
+        
+        ctx.beginPath();
+        ctx.moveTo(conn.sourceNode.x, conn.sourceNode.y);
+        ctx.lineTo(conn.targetNode.x, conn.targetNode.y);
+        ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.6})`;
+        ctx.lineWidth = width;
+        ctx.stroke();
+        
+        // Glow for strong connections
+        if (conn.weight > 3) {
+          ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.2})`;
+          ctx.lineWidth = width + 4;
+          ctx.stroke();
+        }
+      }
+      
+      // Draw nodes
+      for (const node of nodes) {
+        const isHovered = node === hoveredNode;
+        const isSelected = node === selectedNode;
+        const color = colors[node.type] || '#666';
+        const radius = node.radius * (isHovered ? 1.15 : 1);
+        
+        // Glow
+        if (isHovered || isSelected) {
+          ctx.beginPath();
+          ctx.arc(node.x, node.y, radius + 8, 0, Math.PI * 2);
+          ctx.fillStyle = color + '33';
+          ctx.fill();
+        }
+        
+        // Node circle
+        ctx.beginPath();
+        ctx.arc(node.x, node.y, radius, 0, Math.PI * 2);
+        ctx.fillStyle = color;
+        ctx.fill();
+        
+        // Label
+        ctx.fillStyle = '#fff';
+        ctx.font = `${node.type === 'agent' ? 13 : 11}px -apple-system, sans-serif`;
+        ctx.textAlign = 'center';
+        ctx.textBaseline = 'middle';
+        
+        const label = node.label.length > 15 ? node.label.slice(0, 14) + '…' : node.label;
+        ctx.fillText(label, node.x, node.y + radius + 14);
+      }
+      
+      ctx.restore();
+      
+      simulate();
+      requestAnimationFrame(draw);
+    }
+    
+    function getNodeAt(x, y) {
+      const mx = (x - pan.x) / zoom;
+      const my = (y - pan.y) / zoom;
+      
+      for (const node of nodes) {
+        const dx = node.x - mx;
+        const dy = node.y - my;
+        if (dx * dx + dy * dy < node.radius * node.radius) {
+          return node;
+        }
+      }
+      return null;
+    }
+    
+    async function showNodeDetails(node) {
+      selectedNode = node;
+      sidebar.classList.add('visible');
+      
+      document.getElementById('sidebar-title').textContent = node.label;
+      document.querySelector('#sidebar .node-type').className = `node-type ${node.type}`;
+      
+      const content = document.getElementById('sidebar-content');
+      content.innerHTML = 'Loading...';
+      
+      // Fetch entries for this node
+      const targetId = node.type === 'agent' ? null : node.id.split(':').slice(1).join(':');
+      const params = node.type === 'agent' 
+        ? `?agent=${node.id}&limit=10`
+        : `?limit=50`;
+      
+      try {
+        const res = await fetch('/journal' + params);
+        const data = await res.json();
+        
+        // Filter entries related to this node
+        let entries = data.entries;
+        if (node.type !== 'agent') {
+          entries = entries.filter(e => 
+            e.targetId === targetId || 
+            `${e.targetType}:${e.targetId}` === node.id
+          );
+        }
+        
+        if (entries.length === 0) {
+          content.innerHTML = '<div class="entry">No recent activity</div>';
+          return;
+        }
+        
+        content.innerHTML = entries.slice(0, 10).map(e => `
+          <div class="entry">
+            <div class="summary">${escapeHtml(e.summary)}</div>
+            <div class="meta">
+              <span class="action">${e.action}</span>
+              ${formatTime(e.timestamp)}
+              ${e.agentName ? `· ${e.agentName}` : ''}
+            </div>
+          </div>
+        `).join('');
+      } catch (err) {
+        content.innerHTML = '<div class="entry">Failed to load</div>';
+      }
+    }
+    
+    function closeSidebar() {
+      sidebar.classList.remove('visible');
+      selectedNode = null;
+    }
+    
+    function escapeHtml(str) {
+      return str.replace(/[&<>"']/g, c => ({
+        '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;'
+      })[c]);
+    }
+    
+    function formatTime(iso) {
+      const d = new Date(iso);
+      const now = new Date();
+      const diff = (now - d) / 1000;
+      
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+    
+    // Event handlers
+    canvas.addEventListener('mousemove', e => {
+      const node = getNodeAt(e.clientX, e.clientY);
+      hoveredNode = node;
+      canvas.style.cursor = node ? 'pointer' : 'default';
+      
+      if (isDragging && dragNode) {
+        dragNode.x = (e.clientX - pan.x) / zoom;
+        dragNode.y = (e.clientY - pan.y) / zoom;
+        dragNode.vx = 0;
+        dragNode.vy = 0;
+      }
+    });
+    
+    canvas.addEventListener('mousedown', e => {
+      const node = getNodeAt(e.clientX, e.clientY);
+      if (node) {
+        isDragging = true;
+        dragNode = node;
+      }
+    });
+    
+    canvas.addEventListener('mouseup', e => {
+      if (dragNode && !isDragging) {
+        showNodeDetails(dragNode);
+      } else if (isDragging && dragNode) {
+        // Clicked without much movement = select
+        showNodeDetails(dragNode);
+      }
+      isDragging = false;
+      dragNode = null;
+    });
+    
+    canvas.addEventListener('click', e => {
+      const node = getNodeAt(e.clientX, e.clientY);
+      if (node) {
+        showNodeDetails(node);
+      } else {
+        closeSidebar();
+      }
+    });
+    
+    canvas.addEventListener('wheel', e => {
+      e.preventDefault();
+      const delta = e.deltaY > 0 ? 0.9 : 1.1;
+      zoom = Math.max(0.3, Math.min(3, zoom * delta));
+    });
+    
+    // Init
+    window.addEventListener('resize', resize);
+    resize();
+    fetchData();
+    draw();
+    
+    // Poll for updates
+    setInterval(fetchData, 5000);
+  </script>
+</body>
+</html>
