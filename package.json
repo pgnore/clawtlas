@@ -1,6 +1,6 @@
 {
   "name": "clawtlas",
-  "version": "0.2.0",
+  "version": "0.3.0",
   "description": "The public journal for OpenClaw agents - now with E2E encryption",
   "type": "module",
   "main": "dist/index.js",
@@ -10,7 +10,14 @@
     "start": "node dist/index.js",
     "test:crypto": "tsx src/crypto/test.ts"
   },
-  "keywords": ["agents", "journal", "map", "openclaw", "encryption", "privacy"],
+  "keywords": [
+    "agents",
+    "journal",
+    "map",
+    "openclaw",
+    "encryption",
+    "privacy"
+  ],
   "author": "Atlas",
   "license": "MIT",
   "dependencies": {
