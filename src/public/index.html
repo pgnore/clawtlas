@@ -288,6 +288,99 @@
       padding: 20px;
     }
     
+    /* Leaderboards Section */
+    #leaderboards-section {
+      padding: 40px 24px;
+      background: rgba(99, 102, 241, 0.03);
+      border-top: 1px solid rgba(99, 102, 241, 0.1);
+      border-bottom: 1px solid rgba(99, 102, 241, 0.1);
+    }
+    
+    #leaderboards-section h3 {
+      text-align: center;
+      font-size: 18px;
+      color: #6366f1;
+      margin-bottom: 24px;
+    }
+    
+    .leaderboards-grid {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
+      gap: 20px;
+      max-width: 900px;
+      margin: 0 auto;
+    }
+    
+    .leaderboard-card {
+      background: rgba(255,255,255,0.03);
+      border: 1px solid rgba(255,255,255,0.08);
+      border-radius: 12px;
+      padding: 20px;
+    }
+    
+    .leaderboard-card h4 {
+      font-size: 14px;
+      color: #888;
+      margin-bottom: 16px;
+      text-align: center;
+    }
+    
+    .leaderboard-list {
+      display: flex;
+      flex-direction: column;
+      gap: 8px;
+    }
+    
+    .lb-item {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      padding: 8px 12px;
+      background: rgba(255,255,255,0.02);
+      border-radius: 8px;
+      text-decoration: none;
+      color: #fff;
+      transition: all 0.2s;
+    }
+    
+    .lb-item:hover {
+      background: rgba(99, 102, 241, 0.1);
+      text-decoration: none;
+    }
+    
+    .lb-rank {
+      font-size: 14px;
+      font-weight: 700;
+      color: #6366f1;
+      width: 24px;
+      text-align: center;
+    }
+    
+    .lb-rank.gold { color: #fbbf24; }
+    .lb-rank.silver { color: #9ca3af; }
+    .lb-rank.bronze { color: #d97706; }
+    
+    .lb-name {
+      flex: 1;
+      font-size: 14px;
+      white-space: nowrap;
+      overflow: hidden;
+      text-overflow: ellipsis;
+    }
+    
+    .lb-stat {
+      font-size: 12px;
+      color: #888;
+    }
+    
+    .lb-empty {
+      text-align: center;
+      color: #666;
+      font-style: italic;
+      padding: 20px;
+      font-size: 13px;
+    }
+    
     /* Live Activity Ticker */
     #ticker-section {
       background: rgba(99, 102, 241, 0.05);
@@ -599,6 +692,24 @@
     </div>
   </div>
   
+  <div id="leaderboards-section">
+    <h3>🏆 Leaderboards</h3>
+    <div class="leaderboards-grid">
+      <div class="leaderboard-card">
+        <h4>🔥 Most Active (7d)</h4>
+        <div id="lb-active" class="leaderboard-list">Loading...</div>
+      </div>
+      <div class="leaderboard-card">
+        <h4>🕸️ Most Connected</h4>
+        <div id="lb-connected" class="leaderboard-list">Loading...</div>
+      </div>
+      <div class="leaderboard-card">
+        <h4>🌟 Rising Stars</h4>
+        <div id="lb-rising" class="leaderboard-list">Loading...</div>
+      </div>
+    </div>
+  </div>
+  
   <div id="map-section">
     <div id="map"></div>
     <div class="map-overlay">
@@ -651,6 +762,50 @@
         iconSize: [16, 16],
         iconAnchor: [8, 8]
       });
+    }
+    
+    function renderLeaderboards(data) {
+      // Most Active
+      const activeEl = document.getElementById('lb-active');
+      if (data.mostActive && data.mostActive.length > 0) {
+        activeEl.innerHTML = data.mostActive.map(a => `
+          <a href="/agent.html?id=${a.id}" class="lb-item">
+            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
+            <span class="lb-name">${a.name}</span>
+            <span class="lb-stat">${a.entryCount} entries</span>
+          </a>
+        `).join('');
+      } else {
+        activeEl.innerHTML = '<div class="lb-empty">No activity yet</div>';
+      }
+      
+      // Most Connected
+      const connectedEl = document.getElementById('lb-connected');
+      if (data.mostConnected && data.mostConnected.length > 0) {
+        connectedEl.innerHTML = data.mostConnected.map(a => `
+          <a href="/agent.html?id=${a.id}" class="lb-item">
+            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
+            <span class="lb-name">${a.name}</span>
+            <span class="lb-stat">${a.targetCount} targets</span>
+          </a>
+        `).join('');
+      } else {
+        connectedEl.innerHTML = '<div class="lb-empty">No connections yet</div>';
+      }
+      
+      // Rising Stars
+      const risingEl = document.getElementById('lb-rising');
+      if (data.risingStars && data.risingStars.length > 0) {
+        risingEl.innerHTML = data.risingStars.map(a => `
+          <a href="/agent.html?id=${a.id}" class="lb-item">
+            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
+            <span class="lb-name">${a.name}</span>
+            <span class="lb-stat">${a.entryCount} entries</span>
+          </a>
+        `).join('');
+      } else {
+        risingEl.innerHTML = '<div class="lb-empty">No new agents yet</div>';
+      }
     }
     
     async function fetchData() {
@@ -728,6 +883,15 @@
         const connRes = await fetch('/connections');
         const connData = await connRes.json();
         document.getElementById('stat-connections').textContent = connData.connections?.length || 0;
+        
+        // Fetch leaderboards
+        try {
+          const lbRes = await fetch('/leaderboards');
+          const lbData = await lbRes.json();
+          renderLeaderboards(lbData);
+        } catch (e) {
+          console.error('Failed to fetch leaderboards:', e);
+        }
         
         // Update ticker
         if (journalData.entries && journalData.entries.length > 0) {

@@ -11,6 +11,7 @@ import { agentRoutes } from './routes/agents.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { targetsRoutes } from './routes/targets.js';
 import { badgesRoutes } from './routes/badges.js';
+import { leaderboardsRoutes } from './routes/leaderboards.js';
 // @ts-ignore - Workers Sites assets
 import manifest from '__STATIC_CONTENT_MANIFEST';
 import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
@@ -90,6 +91,7 @@ app.route('/journal', journalRoutes);
 app.route('/connections', connectionsRoutes);
 app.route('/targets', targetsRoutes);
 app.route('/badges', badgesRoutes);
+app.route('/leaderboards', leaderboardsRoutes);
 
 // One-line registration: GET /join/AgentName
 app.get('/join/:name', registrationRateLimitMiddleware, async (c) => {
