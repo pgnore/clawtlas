@@ -1,6 +1,6 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
-import { insertAgent, getAgents, getAgentById } from '../db.js';
+import { insertAgent, getAgents, getAgentById, getAgentByToken, updateAgentLocation } from '../db.js';
 import crypto from 'crypto';
 
 export const agentRoutes = new Hono();
@@ -51,7 +51,13 @@ agentRoutes.get('/', (c) => {
         id: a.id,
         name: a.name,
         created_at: a.created_at,
-        metadata: a.metadata ? JSON.parse(a.metadata) : null
+        metadata: a.metadata ? JSON.parse(a.metadata) : null,
+        location: a.location_precision !== 'hidden' && a.location_lat ? {
+          lat: a.location_lat,
+          lng: a.location_lng,
+          label: a.location_label,
+          precision: a.location_precision
+        } : null
       }))
     });
   } catch (err: any) {
@@ -71,10 +77,75 @@ agentRoutes.get('/:id', (c) => {
       id: agent.id,
       name: agent.name,
       created_at: agent.created_at,
-      metadata: agent.metadata ? JSON.parse(agent.metadata) : null
+      metadata: agent.metadata ? JSON.parse(agent.metadata) : null,
+      location: agent.location_precision !== 'hidden' ? {
+        lat: agent.location_lat,
+        lng: agent.location_lng,
+        label: agent.location_label,
+        precision: agent.location_precision,
+        updated_at: agent.location_updated_at
+      } : null
     });
   } catch (err: any) {
     console.error('[agents] Error getting agent:', err);
     return c.json({ error: 'Failed to get agent' }, 500);
+  }
+});
+
+// Update agent location (auth required)
+agentRoutes.patch('/me/location', async (c) => {
+  try {
+    const auth = c.req.header('Authorization');
+    if (!auth?.startsWith('Bearer ')) {
+      return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+    }
+    
+    const token = auth.slice(7);
+    const agent = getAgentByToken.get(token) as any;
+    if (!agent) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    const body = await c.req.json();
+    const { lat, lng, label, precision } = body;
+
+    // Validate precision
+    const validPrecisions = ['hidden', 'country', 'city', 'neighborhood', 'exact'];
+    if (precision && !validPrecisions.includes(precision)) {
+      return c.json({ error: `precision must be one of: ${validPrecisions.join(', ')}` }, 400);
+    }
+
+    // If hiding, clear location data
+    if (precision === 'hidden') {
+      updateAgentLocation.run(null, null, null, 'hidden', agent.id);
+      return c.json({ status: 'location hidden' });
+    }
+
+    // Otherwise, validate coordinates
+    if (lat === undefined || lng === undefined) {
+      return c.json({ error: 'lat and lng are required (or set precision to "hidden")' }, 400);
+    }
+
+    if (lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return c.json({ error: 'Invalid coordinates' }, 400);
+    }
+
+    updateAgentLocation.run(
+      lat,
+      lng,
+      label || null,
+      precision || 'city',
+      agent.id
+    );
+
+    console.log(`[agents] ${agent.name} updated location: ${label || `${lat},${lng}`} (${precision || 'city'})`);
+
+    return c.json({ 
+      status: 'location updated',
+      location: { lat, lng, label, precision: precision || 'city' }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error updating location:', err);
+    return c.json({ error: 'Failed to update location' }, 500);
   }
 });

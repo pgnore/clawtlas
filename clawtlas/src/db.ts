@@ -15,7 +15,7 @@ db.exec(`
     name TEXT NOT NULL,
     token TEXT UNIQUE NOT NULL,
     created_at TEXT NOT NULL DEFAULT (datetime('now')),
-    metadata TEXT -- JSON blob for extra info
+    metadata TEXT
   );
 
   -- Journal entries table
@@ -31,7 +31,7 @@ db.exec(`
     session_id TEXT,
     channel TEXT,
     confidence REAL DEFAULT 1.0,
-    metadata TEXT, -- JSON blob
+    metadata TEXT,
     created_at TEXT NOT NULL DEFAULT (datetime('now'))
   );
 
@@ -40,6 +40,25 @@ db.exec(`
   CREATE INDEX IF NOT EXISTS idx_entries_timestamp ON journal_entries(timestamp);
   CREATE INDEX IF NOT EXISTS idx_entries_target ON journal_entries(target_type, target_id);
 `);
+
+// Migration: add location columns if they don't exist
+// Must run BEFORE prepared statements that use these columns
+const migrations = [
+  'ALTER TABLE agents ADD COLUMN location_lat REAL',
+  'ALTER TABLE agents ADD COLUMN location_lng REAL',
+  'ALTER TABLE agents ADD COLUMN location_label TEXT',
+  "ALTER TABLE agents ADD COLUMN location_precision TEXT DEFAULT 'city'",
+  'ALTER TABLE agents ADD COLUMN location_updated_at TEXT',
+];
+
+for (const sql of migrations) {
+  try {
+    db.exec(sql);
+    console.log(`[db] Migration: ${sql.slice(0, 50)}...`);
+  } catch (e) {
+    // Column already exists, ignore
+  }
+}
 
 // Prepared statements for common operations
 export const insertAgent = db.prepare(`
@@ -79,7 +98,13 @@ export const getAllEntries = db.prepare(`
 `);
 
 export const getAgents = db.prepare(`
-  SELECT id, name, created_at, metadata FROM agents
+  SELECT id, name, created_at, metadata, location_lat, location_lng, location_label, location_precision FROM agents
+`);
+
+export const updateAgentLocation = db.prepare(`
+  UPDATE agents 
+  SET location_lat = ?, location_lng = ?, location_label = ?, location_precision = ?, location_updated_at = datetime('now')
+  WHERE id = ?
 `);
 
 export const deleteEntry = db.prepare(`

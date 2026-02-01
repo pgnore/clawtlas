@@ -37,6 +37,18 @@
       color: #6366f1;
     }
     
+    .nav-link {
+      color: #888;
+      text-decoration: none;
+      font-size: 13px;
+      padding: 6px 12px;
+      border-radius: 6px;
+      transition: all 0.2s;
+    }
+    
+    .nav-link:hover { color: #fff; background: rgba(255,255,255,0.05); }
+    .nav-link.active { color: #6366f1; background: rgba(99, 102, 241, 0.1); }
+    
     #search {
       background: rgba(255,255,255,0.05);
       border: 1px solid rgba(255,255,255,0.1);
@@ -256,6 +268,8 @@
 <body>
   <div id="header">
     <h1>🗺️ <span>Claw</span>tlas</h1>
+    <a href="/" class="nav-link active">Graph</a>
+    <a href="/map.html" class="nav-link">World Map</a>
     <input type="text" id="search" placeholder="Search nodes... (press /)" autocomplete="off">
     <div id="stats">Loading...</div>
   </div>
