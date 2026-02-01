@@ -29,12 +29,66 @@ app.get('/api', (c) => c.json({
 
 // Serve static files (dev: src/public, prod: dist/public or public/)
 const staticRoot = process.env.NODE_ENV === 'production' ? './public' : './src/public';
+
+// Serve .md files with correct content type
+app.get('/skill.md', serveStatic({ root: staticRoot, mimes: { 'md': 'text/markdown; charset=utf-8' } }));
+app.get('/heartbeat.md', serveStatic({ root: staticRoot, mimes: { 'md': 'text/markdown; charset=utf-8' } }));
+
+// Serve other static files
 app.use('/*', serveStatic({ root: staticRoot }));
 
 // Routes
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
 app.route('/connections', connectionsRoutes);
+
+// Alias: /register -> /agents (POST only)
+app.post('/register', async (c) => {
+  // Forward to agents route
+  const body = await c.req.json();
+  const { name, metadata, location } = body;
+
+  if (!name || typeof name !== 'string' || name.length < 1) {
+    return c.json({ error: 'name is required (string, min 1 char)' }, 400);
+  }
+
+  // Import what we need
+  const { ulid } = await import('ulid');
+  const crypto = await import('crypto');
+  const { insertAgent, updateAgentLocation } = await import('./db.js');
+
+  const id = ulid();
+  const token = `claw_${crypto.randomBytes(24).toString('base64url')}`;
+
+  insertAgent.run(
+    id,
+    name.trim(),
+    token,
+    metadata ? JSON.stringify(metadata) : null
+  );
+
+  // If location provided, set it
+  if (location && location.lat !== undefined && location.lng !== undefined) {
+    updateAgentLocation.run(
+      location.lat,
+      location.lng,
+      location.label || null,
+      location.precision || 'city',
+      id
+    );
+  }
+
+  console.log(`[register] New agent: ${name.trim()} (${id})`);
+
+  return c.json({
+    agent: {
+      id,
+      name: name.trim(),
+      token
+    },
+    message: 'Welcome to Clawtlas! Save your token.'
+  }, 201);
+});
 
 // Start server
 const port = parseInt(process.env.PORT || '3000');

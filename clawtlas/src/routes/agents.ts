@@ -14,7 +14,7 @@ function generateToken(): string {
 agentRoutes.post('/', async (c) => {
   try {
     const body = await c.req.json();
-    const { name, metadata } = body;
+    const { name, metadata, location } = body;
 
     if (!name || typeof name !== 'string' || name.length < 1) {
       return c.json({ error: 'name is required (string, min 1 char)' }, 400);
@@ -30,15 +30,115 @@ agentRoutes.post('/', async (c) => {
       metadata ? JSON.stringify(metadata) : null
     );
 
+    // If location provided at registration, set it
+    if (location && location.lat !== undefined && location.lng !== undefined) {
+      updateAgentLocation.run(
+        location.lat,
+        location.lng,
+        location.label || null,
+        location.precision || 'city',
+        id
+      );
+    }
+
+    console.log(`[agents] New agent registered: ${name.trim()} (${id})`);
+
     return c.json({
-      id,
-      name: name.trim(),
-      token, // Only returned once at creation!
-      message: 'Save this token - it won\'t be shown again'
+      agent: {
+        id,
+        name: name.trim(),
+        token // Only returned once at creation!
+      },
+      message: 'Welcome to Clawtlas! Save your token.'
     }, 201);
   } catch (err: any) {
     console.error('[agents] Error creating agent:', err);
     return c.json({ error: 'Failed to create agent' }, 500);
+  }
+});
+
+// Get current agent profile (auth required)
+agentRoutes.get('/me', (c) => {
+  try {
+    const auth = c.req.header('Authorization');
+    if (!auth?.startsWith('Bearer ')) {
+      return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+    }
+    
+    const token = auth.slice(7);
+    const agent = getAgentByToken.get(token) as any;
+    if (!agent) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    return c.json({
+      id: agent.id,
+      name: agent.name,
+      created_at: agent.created_at,
+      metadata: agent.metadata ? JSON.parse(agent.metadata) : null,
+      location: agent.location_lat ? {
+        lat: agent.location_lat,
+        lng: agent.location_lng,
+        label: agent.location_label,
+        precision: agent.location_precision
+      } : null
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting own profile:', err);
+    return c.json({ error: 'Failed to get profile' }, 500);
+  }
+});
+
+// Update current agent (auth required)
+agentRoutes.patch('/me', async (c) => {
+  try {
+    const auth = c.req.header('Authorization');
+    if (!auth?.startsWith('Bearer ')) {
+      return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+    }
+    
+    const token = auth.slice(7);
+    const agent = getAgentByToken.get(token) as any;
+    if (!agent) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    const body = await c.req.json();
+    
+    // Handle location update
+    if ('location' in body) {
+      if (body.location === null) {
+        // Clear location
+        updateAgentLocation.run(null, null, null, 'hidden', agent.id);
+        console.log(`[agents] ${agent.name} cleared location`);
+      } else if (body.location.lat !== undefined && body.location.lng !== undefined) {
+        // Update location
+        updateAgentLocation.run(
+          body.location.lat,
+          body.location.lng,
+          body.location.label || null,
+          body.location.precision || 'city',
+          agent.id
+        );
+        console.log(`[agents] ${agent.name} updated location: ${body.location.label || 'unlabeled'}`);
+      }
+    }
+
+    // Return updated profile
+    const updated = getAgentByToken.get(token) as any;
+    return c.json({
+      id: updated.id,
+      name: updated.name,
+      location: updated.location_lat ? {
+        lat: updated.location_lat,
+        lng: updated.location_lng,
+        label: updated.location_label,
+        precision: updated.location_precision
+      } : null
+    });
+  } catch (err: any) {
+    console.error('[agents] Error updating profile:', err);
+    return c.json({ error: 'Failed to update profile' }, 500);
   }
 });
 
