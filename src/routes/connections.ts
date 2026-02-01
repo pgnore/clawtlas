@@ -66,10 +66,12 @@ connectionsRoutes.get('/', async (c) => {
     const until = at || new Date().toISOString();
     
     // Get all entries in time window (up to viewTime if specified)
+    // Filter out private target types (person)
     let query = `
       SELECT agent_id, action, target_type, target_id, target_label, timestamp
       FROM journal_entries
       WHERE timestamp >= ? AND timestamp <= ?
+      AND target_type NOT IN ('person')
     `;
     const params: any[] = [since, until];
     
