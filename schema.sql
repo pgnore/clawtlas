@@ -92,3 +92,36 @@ CREATE TABLE IF NOT EXISTS acl_grants (
   PRIMARY KEY (entry_id, grantee_hash),
   FOREIGN KEY (entry_id) REFERENCES secure_entries(entry_id)
 );
+
+-- Digital targets (repos, services, APIs, etc.)
+-- These are the non-physical entities that agents interact with
+CREATE TABLE IF NOT EXISTS targets (
+  id TEXT PRIMARY KEY,
+  type TEXT NOT NULL,           -- repo, service, api, social, website, agent, person, topic, etc.
+  identifier TEXT NOT NULL,     -- github.com/user/repo, api.openai.com, @username, etc.
+  name TEXT,                    -- Display name
+  metadata TEXT,                -- JSON: description, stars, icon, etc.
+  first_seen TEXT NOT NULL DEFAULT (datetime('now')),
+  last_seen TEXT NOT NULL DEFAULT (datetime('now')),
+  interaction_count INTEGER DEFAULT 0,
+  UNIQUE(type, identifier)
+);
+
+CREATE INDEX IF NOT EXISTS idx_targets_type ON targets(type);
+CREATE INDEX IF NOT EXISTS idx_targets_identifier ON targets(identifier);
+CREATE INDEX IF NOT EXISTS idx_targets_last_seen ON targets(last_seen);
+
+-- Agent-Target interaction stats (who touched what, how much)
+CREATE TABLE IF NOT EXISTS agent_target_stats (
+  agent_id TEXT NOT NULL,
+  target_id TEXT NOT NULL,
+  interaction_count INTEGER DEFAULT 1,
+  first_interaction TEXT NOT NULL DEFAULT (datetime('now')),
+  last_interaction TEXT NOT NULL DEFAULT (datetime('now')),
+  PRIMARY KEY (agent_id, target_id),
+  FOREIGN KEY (agent_id) REFERENCES agents(id),
+  FOREIGN KEY (target_id) REFERENCES targets(id)
+);
+
+CREATE INDEX IF NOT EXISTS idx_ats_agent ON agent_target_stats(agent_id);
+CREATE INDEX IF NOT EXISTS idx_ats_target ON agent_target_stats(target_id);

@@ -39,30 +39,14 @@ type Variables = {
 
 export const journalRoutes = new Hono<{ Bindings: Env; Variables: Variables }>();
 
-// Valid action types
-const ACTIONS = new Set([
-  'message_sent',
-  'message_received', 
-  'file_read',
-  'file_write',
-  'search',
-  'url_fetch',
-  'calendar_read',
-  'calendar_write',
-  'memory_access',
-  'tool_use'
-]);
+// Common action types (not enforced, just documented)
+// message_sent, message_received, file_read, file_write, search, url_fetch,
+// calendar_read, calendar_write, memory_access, tool_use, committed, created,
+// updated, deleted, read, discussed, helped, tweeted, commented, deployed, etc.
 
-// Valid target types
-const TARGET_TYPES = new Set([
-  'person',
-  'file',
-  'url',
-  'topic',
-  'channel',
-  'event',
-  'agent'
-]);
+// Common target types (not enforced, just documented)
+// person, file, url, topic, channel, event, agent, repo, service, api, 
+// social, website, project, organization, etc.
 
 // Auth middleware
 async function requireAuth(c: any, next: any) {
@@ -94,35 +78,30 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
     // Validate required fields
     const { timestamp, action, targetType, targetId, summary } = body;
 
-    if (!timestamp) {
-      return c.json({ error: 'timestamp is required (ISO 8601)' }, 400);
+    if (!action || typeof action !== 'string') {
+      return c.json({ error: 'action is required' }, 400);
     }
-    if (!action || !ACTIONS.has(action)) {
-      return c.json({ 
-        error: `action must be one of: ${[...ACTIONS].join(', ')}` 
-      }, 400);
+    if (!targetType || typeof targetType !== 'string') {
+      return c.json({ error: 'targetType is required' }, 400);
     }
-    if (!targetType || !TARGET_TYPES.has(targetType)) {
-      return c.json({ 
-        error: `targetType must be one of: ${[...TARGET_TYPES].join(', ')}` 
-      }, 400);
-    }
-    if (!targetId) {
+    if (!targetId || typeof targetId !== 'string') {
       return c.json({ error: 'targetId is required' }, 400);
     }
-    if (!summary || summary.length > 280) {
-      return c.json({ error: 'summary is required (max 280 chars)' }, 400);
+    if (!summary || summary.length > 500) {
+      return c.json({ error: 'summary is required (max 500 chars)' }, 400);
     }
 
     const id = body.id || ulid();
+    const ts = timestamp || new Date().toISOString();
 
+    // Insert journal entry
     await db.prepare(`
       INSERT INTO journal_entries 
       (id, timestamp, agent_id, action, target_type, target_id, summary, target_label, session_id, channel, confidence, metadata)
       VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
     `).bind(
       id,
-      timestamp,
+      ts,
       agent.id,
       action,
       targetType,
@@ -134,6 +113,38 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
       body.confidence ?? 1.0,
       body.metadata ? JSON.stringify(body.metadata) : null
     ).run();
+
+    // Auto-create/update target in the digital map
+    const targetUlid = ulid();
+    await db.prepare(`
+      INSERT INTO targets (id, type, identifier, name, first_seen, last_seen, interaction_count)
+      VALUES (?, ?, ?, ?, datetime('now'), datetime('now'), 1)
+      ON CONFLICT(type, identifier) DO UPDATE SET
+        last_seen = datetime('now'),
+        interaction_count = interaction_count + 1,
+        name = COALESCE(excluded.name, name)
+    `).bind(
+      targetUlid,
+      targetType,
+      targetId,
+      body.targetLabel || null
+    ).run();
+
+    // Get the target ID (either new or existing)
+    const target = await db.prepare(
+      'SELECT id FROM targets WHERE type = ? AND identifier = ?'
+    ).bind(targetType, targetId).first<{ id: string }>();
+
+    if (target) {
+      // Update agent-target interaction stats
+      await db.prepare(`
+        INSERT INTO agent_target_stats (agent_id, target_id, interaction_count, first_interaction, last_interaction)
+        VALUES (?, ?, 1, datetime('now'), datetime('now'))
+        ON CONFLICT(agent_id, target_id) DO UPDATE SET
+          interaction_count = interaction_count + 1,
+          last_interaction = datetime('now')
+      `).bind(agent.id, target.id).run();
+    }
 
     // Update agent presence
     await db.prepare('UPDATE agents SET last_seen = datetime(\'now\') WHERE id = ?').bind(agent.id).run();

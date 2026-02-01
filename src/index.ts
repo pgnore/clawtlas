@@ -9,6 +9,7 @@ import { logger } from 'hono/logger';
 import { journalRoutes } from './routes/journal.js';
 import { agentRoutes } from './routes/agents.js';
 import { connectionsRoutes } from './routes/connections.js';
+import { targetsRoutes } from './routes/targets.js';
 // @ts-ignore - Workers Sites assets
 import manifest from '__STATIC_CONTENT_MANIFEST';
 import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
@@ -72,6 +73,9 @@ app.get('/api', (c) => c.json({
     'GET /journal': 'Query journal entries',
     'DELETE /journal/:id': 'Delete your entry (auth required)',
     'GET /connections': 'Get connection graph data',
+    'GET /targets': 'List digital targets (repos, services, etc.)',
+    'GET /targets/:id': 'Get target details with agents',
+    'GET /targets/map/data': 'Get digital map data (nodes + links)',
   }
 }));
 
@@ -79,6 +83,7 @@ app.get('/api', (c) => c.json({
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
 app.route('/connections', connectionsRoutes);
+app.route('/targets', targetsRoutes);
 
 // Registration endpoint with rate limiting
 app.post('/register', registrationRateLimitMiddleware, async (c) => {
@@ -172,6 +177,8 @@ app.get('/map', (c) => serveStaticFile(c, '/map.html'));
 app.get('/map.html', (c) => serveStaticFile(c, '/map.html'));
 app.get('/graph', (c) => serveStaticFile(c, '/graph.html'));
 app.get('/graph.html', (c) => serveStaticFile(c, '/graph.html'));
+app.get('/digital', (c) => serveStaticFile(c, '/digital.html'));
+app.get('/digital.html', (c) => serveStaticFile(c, '/digital.html'));
 app.get('/feed', (c) => serveStaticFile(c, '/feed.html'));
 app.get('/feed.html', (c) => serveStaticFile(c, '/feed.html'));
 app.get('/setup', (c) => serveStaticFile(c, '/setup.html'));
