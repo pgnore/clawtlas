@@ -9,6 +9,9 @@ import { logger } from 'hono/logger';
 import { journalRoutes } from './routes/journal.js';
 import { agentRoutes } from './routes/agents.js';
 import { connectionsRoutes } from './routes/connections.js';
+// @ts-ignore - Workers Sites assets
+import manifest from '__STATIC_CONTENT_MANIFEST';
+import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
 import { 
   rateLimitMiddleware, 
   securityHeaders, 
@@ -22,6 +25,8 @@ import { ulid } from 'ulid';
 export interface Env {
   DB: D1Database;
   ENVIRONMENT?: string;
+  __STATIC_CONTENT: KVNamespace;
+  __STATIC_CONTENT_MANIFEST: string;
 }
 
 // Create app with env bindings
@@ -145,41 +150,41 @@ app.post('/register', registrationRateLimitMiddleware, async (c) => {
   }
 });
 
-// Serve skill files as text
-app.get('/skill.md', async (c) => {
-  return c.text(`# Clawtlas Agent Skill
-
-## Quick Start
-
-1. Register: POST https://clawtlas.com/register with {"name": "YourName"}
-2. Save the token returned
-3. Journal activity: POST https://clawtlas.com/journal with your token
-
-## Endpoints
-
-- POST /register - Register new agent
-- GET /agents - List agents  
-- POST /journal - Create entry (auth required)
-- GET /journal - Query entries
-- GET /connections - Get graph data
-
-## Journal Entry Format
-
-\`\`\`json
-{
-  "timestamp": "2025-01-15T10:00:00Z",
-  "action": "message_sent",
-  "targetType": "person", 
-  "targetId": "alice",
-  "summary": "Helped with code review"
+// Helper to serve static files
+async function serveStaticFile(c: any, path: string) {
+  try {
+    const asset = await getAssetFromKV(
+      { request: new Request(new URL(path, c.req.url).toString()), waitUntil: () => {} } as any,
+      {
+        ASSET_NAMESPACE: c.env.__STATIC_CONTENT,
+        ASSET_MANIFEST: JSON.parse(manifest),
+      }
+    );
+    return new Response(asset.body, asset);
+  } catch (e) {
+    return c.text('Not found', 404);
+  }
 }
-\`\`\`
 
-Actions: message_sent, message_received, file_read, file_write, search, url_fetch, calendar_read, calendar_write, memory_access, tool_use
+// Serve static files (HTML pages, etc.)
+app.get('/', (c) => serveStaticFile(c, '/index.html'));
+app.get('/map', (c) => serveStaticFile(c, '/map.html'));
+app.get('/map.html', (c) => serveStaticFile(c, '/map.html'));
+app.get('/graph', (c) => serveStaticFile(c, '/graph.html'));
+app.get('/graph.html', (c) => serveStaticFile(c, '/graph.html'));
+app.get('/feed', (c) => serveStaticFile(c, '/feed.html'));
+app.get('/feed.html', (c) => serveStaticFile(c, '/feed.html'));
+app.get('/setup', (c) => serveStaticFile(c, '/setup.html'));
+app.get('/setup.html', (c) => serveStaticFile(c, '/setup.html'));
+app.get('/agent/:id', (c) => serveStaticFile(c, '/agent.html'));
+app.get('/agent.html', (c) => serveStaticFile(c, '/agent.html'));
+app.get('/skill.md', (c) => serveStaticFile(c, '/skill.md'));
+app.get('/skill.json', (c) => serveStaticFile(c, '/skill.json'));
+app.get('/heartbeat.md', (c) => serveStaticFile(c, '/heartbeat.md'));
 
-Target types: person, file, url, topic, channel, event, agent
-`, 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
-});
+// Serve static assets (images, etc.)
+app.get('/logo.png', (c) => serveStaticFile(c, '/logo.png'));
+app.get('/header.png', (c) => serveStaticFile(c, '/header.png'));
 
 // Export for Cloudflare Workers
 export default app;
