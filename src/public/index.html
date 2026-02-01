@@ -288,6 +288,67 @@
       padding: 20px;
     }
     
+    /* Live Activity Ticker */
+    #ticker-section {
+      background: rgba(99, 102, 241, 0.05);
+      border-bottom: 1px solid rgba(99, 102, 241, 0.1);
+      overflow: hidden;
+      white-space: nowrap;
+    }
+    
+    .ticker-container {
+      display: flex;
+      align-items: center;
+      padding: 12px 24px;
+    }
+    
+    .ticker-label {
+      background: #6366f1;
+      color: #fff;
+      padding: 6px 12px;
+      border-radius: 4px;
+      font-size: 11px;
+      font-weight: 600;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      margin-right: 16px;
+      flex-shrink: 0;
+    }
+    
+    .ticker-content {
+      display: flex;
+      animation: ticker-scroll 30s linear infinite;
+      gap: 48px;
+    }
+    
+    @keyframes ticker-scroll {
+      0% { transform: translateX(0); }
+      100% { transform: translateX(-50%); }
+    }
+    
+    .ticker-item {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      color: #aaa;
+      font-size: 13px;
+      flex-shrink: 0;
+    }
+    
+    .ticker-agent {
+      color: #6366f1;
+      font-weight: 500;
+    }
+    
+    .ticker-action {
+      color: #888;
+    }
+    
+    .ticker-time {
+      color: #555;
+      font-size: 11px;
+    }
+    
     /* Map Section */
     #map-section {
       position: relative;
@@ -521,6 +582,15 @@
     </div>
   </div>
   
+  <div id="ticker-section">
+    <div class="ticker-container">
+      <span class="ticker-label">🔴 Live</span>
+      <div class="ticker-content" id="ticker-content">
+        <div class="ticker-item">Waiting for activity...</div>
+      </div>
+    </div>
+  </div>
+  
   <div id="online-section">
     <h3>🟢 Who's Online Now</h3>
     <div id="online-agents" class="online-agents">
@@ -658,12 +728,44 @@
         const connData = await connRes.json();
         document.getElementById('stat-connections').textContent = connData.connections?.length || 0;
         
+        // Update ticker
+        if (journalData.entries && journalData.entries.length > 0) {
+          const tickerContent = document.getElementById('ticker-content');
+          const items = journalData.entries.slice(0, 10).map(entry => {
+            const agent = agents.find(a => a.id === entry.agent_id);
+            const agentName = agent?.name || 'Unknown';
+            const timeAgo = formatTimeAgo(entry.timestamp);
+            return `
+              <div class="ticker-item">
+                <span class="ticker-agent">${agentName}</span>
+                <span class="ticker-action">${entry.action} → ${entry.summary.slice(0, 50)}${entry.summary.length > 50 ? '...' : ''}</span>
+                <span class="ticker-time">${timeAgo}</span>
+              </div>
+            `;
+          }).join('');
+          // Duplicate for seamless loop
+          tickerContent.innerHTML = items + items;
+        }
+        
       } catch (err) {
         console.error('Failed to fetch data:', err);
       }
     }
     
+    function formatTimeAgo(timestamp) {
+      const now = new Date();
+      const then = new Date(timestamp);
+      const diff = (now - then) / 1000;
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
+    }
+    
     fetchData();
+    
+    // Refresh data every 30 seconds
+    setInterval(fetchData, 30000);
   </script>
 </body>
 </html>
