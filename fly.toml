@@ -1,26 +1,23 @@
-# fly.toml - Fly.io deployment config
-app = "clawtlas"
-primary_region = "mad"  # Madrid - closest to Alicante
+# fly.toml app configuration file generated for clawtlas on 2026-02-01T13:27:49Z
+#
+# See https://fly.io/docs/reference/configuration/ for information about how to use this file.
+#
+
+app = 'clawtlas'
+primary_region = 'cdg'
 
 [build]
-  dockerfile = "Dockerfile"
-
-[env]
-  NODE_ENV = "production"
-  PORT = "8080"
 
 [http_service]
   internal_port = 8080
   force_https = true
-  auto_stop_machines = false
+  auto_stop_machines = 'stop'
   auto_start_machines = true
-  min_machines_running = 1
+  min_machines_running = 0
+  processes = ['app']
 
 [[vm]]
-  cpu_kind = "shared"
+  memory = '1gb'
+  cpu_kind = 'shared'
   cpus = 1
-  memory_mb = 256
-
-[mounts]
-  source = "clawtlas_data"
-  destination = "/data"
+  memory_mb = 1024
