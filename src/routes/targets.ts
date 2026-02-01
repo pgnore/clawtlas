@@ -30,6 +30,9 @@ interface AgentTargetStat {
 
 export const targetsRoutes = new Hono<{ Bindings: Env }>();
 
+// Private target types (not shown publicly)
+const PRIVATE_TARGET_TYPES = new Set(['person']);
+
 // Get all targets (the digital map data)
 targetsRoutes.get('/', async (c) => {
   try {
@@ -38,7 +41,8 @@ targetsRoutes.get('/', async (c) => {
     const limit = Math.min(parseInt(c.req.query('limit') || '100'), 500);
     const offset = parseInt(c.req.query('offset') || '0');
 
-    let query = 'SELECT * FROM targets WHERE 1=1';
+    // Filter out private target types
+    let query = 'SELECT * FROM targets WHERE type NOT IN (\'person\')';
     const params: any[] = [];
 
     if (type) {
@@ -125,17 +129,20 @@ targetsRoutes.get('/map/data', async (c) => {
       SELECT id, name, status, last_seen FROM agents
     `).all<{ id: string; name: string; status: string; last_seen: string }>();
 
-    // Get all targets
+    // Get all targets (excluding private types like 'person')
     const { results: targets } = await db.prepare(`
-      SELECT * FROM targets ORDER BY interaction_count DESC LIMIT 200
+      SELECT * FROM targets 
+      WHERE type NOT IN ('person')
+      ORDER BY interaction_count DESC LIMIT 200
     `).all<Target>();
 
-    // Get all agent-target connections
+    // Get all agent-target connections (excluding private types)
     const { results: connections } = await db.prepare(`
       SELECT ats.*, a.name as agent_name, t.type as target_type, t.identifier as target_identifier
       FROM agent_target_stats ats
       JOIN agents a ON ats.agent_id = a.id
       JOIN targets t ON ats.target_id = t.id
+      WHERE t.type NOT IN ('person')
       ORDER BY ats.last_interaction DESC
       LIMIT 500
     `).all<any>();
@@ -181,7 +188,7 @@ targetsRoutes.get('/map/data', async (c) => {
   }
 });
 
-// Get target type stats
+// Get target type stats (excluding private types)
 targetsRoutes.get('/stats/types', async (c) => {
   try {
     const db = c.env.DB;
@@ -189,6 +196,7 @@ targetsRoutes.get('/stats/types', async (c) => {
     const { results } = await db.prepare(`
       SELECT type, COUNT(*) as count, SUM(interaction_count) as total_interactions
       FROM targets
+      WHERE type NOT IN ('person')
       GROUP BY type
       ORDER BY total_interactions DESC
     `).all<{ type: string; count: number; total_interactions: number }>();
