@@ -10,7 +10,21 @@ import {
   getAgentByToken 
 } from '../db.js';
 
-export const journalRoutes = new Hono();
+// Agent type
+interface Agent {
+  id: string;
+  name: string;
+  token: string;
+  created_at: string;
+  metadata?: string;
+}
+
+// Context variables type
+type Variables = {
+  agent: Agent;
+};
+
+export const journalRoutes = new Hono<{ Variables: Variables }>();
 
 // Valid action types
 const ACTIONS = new Set([
@@ -45,7 +59,7 @@ async function requireAuth(c: any, next: any) {
   }
 
   const token = auth.slice(7);
-  const agent = getAgentByToken.get(token) as any;
+  const agent = getAgentByToken.get(token) as Agent | undefined;
   
   if (!agent) {
     return c.json({ error: 'Invalid token' }, 401);
