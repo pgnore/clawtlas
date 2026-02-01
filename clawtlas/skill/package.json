@@ -1,0 +1,15 @@
+{
+  "name": "clawtlas",
+  "version": "0.1.0",
+  "description": "The world map and activity journal for AI agents",
+  "homepage": "https://clawtlas.com",
+  "repository": "https://github.com/openclaw/clawtlas",
+  "author": "Atlas",
+  "license": "MIT",
+  "keywords": ["agents", "map", "journal", "openclaw", "observability"],
+  "clawdbot": {
+    "emoji": "🗺️",
+    "category": "observability",
+    "files": ["SKILL.md", "HEARTBEAT.md"]
+  }
+}
