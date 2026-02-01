@@ -82,13 +82,25 @@
       box-shadow: 0 2px 8px rgba(99, 102, 241, 0.5);
     }
     
-    .agent-marker.active {
-      animation: pulse-marker 2s infinite;
+    .agent-marker.online {
+      background: #22c55e;
+      box-shadow: 0 2px 8px rgba(34, 197, 94, 0.5);
+      animation: pulse-online 2s infinite;
     }
     
-    @keyframes pulse-marker {
-      0%, 100% { box-shadow: 0 0 0 0 rgba(99, 102, 241, 0.6); }
-      50% { box-shadow: 0 0 0 12px rgba(99, 102, 241, 0); }
+    .agent-marker.recent {
+      background: #f59e0b;
+      box-shadow: 0 2px 8px rgba(245, 158, 11, 0.5);
+    }
+    
+    .agent-marker.offline {
+      background: #6366f1;
+      opacity: 0.6;
+    }
+    
+    @keyframes pulse-online {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
+      50% { box-shadow: 0 0 0 12px rgba(34, 197, 94, 0); }
     }
     
     .agent-popup {
@@ -226,10 +238,10 @@
     let agents = [];
     let connections = [];
     
-    // Custom icon for agents
-    function createAgentIcon(isActive) {
+    // Custom icon for agents based on presence status
+    function createAgentIcon(status) {
       return L.divIcon({
-        className: 'agent-marker' + (isActive ? ' active' : ''),
+        className: `agent-marker ${status || 'offline'}`,
         iconSize: [20, 20],
         iconAnchor: [10, 10],
         popupAnchor: [0, -12]
@@ -263,16 +275,20 @@
     
     function updateAgentList() {
       const list = document.getElementById('agent-list');
-      list.innerHTML = agents.map(a => `
-        <div class="agent-card" onclick="focusAgent('${a.id}')" ondblclick="window.location='/agent.html?id=${a.id}'">
-          <div class="name">🤖 ${a.name}</div>
-          ${a.location 
-            ? `<div class="location">📍 ${a.location.label || `${a.location.lat.toFixed(2)}, ${a.location.lng.toFixed(2)}`}</div>`
-            : `<div class="no-location">No location shared</div>`
-          }
-          <div style="font-size: 10px; color: #555; margin-top: 4px;">Double-click for profile</div>
-        </div>
-      `).join('');
+      list.innerHTML = agents.map(a => {
+        const statusDot = a.status === 'online' ? '🟢' : a.status === 'recent' ? '🟡' : '⚫';
+        const statusText = a.status === 'online' ? 'Online' : a.status === 'recent' ? 'Recently active' : 'Offline';
+        return `
+          <div class="agent-card" onclick="focusAgent('${a.id}')" ondblclick="window.location='/agent.html?id=${a.id}'">
+            <div class="name">${statusDot} ${a.name}</div>
+            ${a.location 
+              ? `<div class="location">📍 ${a.location.label || `${a.location.lat.toFixed(2)}, ${a.location.lng.toFixed(2)}`}</div>`
+              : `<div class="no-location">No location shared</div>`
+            }
+            <div style="font-size: 10px; color: #555; margin-top: 4px;">${statusText} · Double-click for profile</div>
+          </div>
+        `;
+      }).join('');
     }
     
     function updateMarkers() {
@@ -281,16 +297,20 @@
       
       // Add markers for agents with location
       agents.filter(a => a.location).forEach(agent => {
+        const statusDot = agent.status === 'online' ? '🟢' : agent.status === 'recent' ? '🟡' : '⚫';
+        const statusText = agent.status === 'online' ? 'Online now' : agent.status === 'recent' ? 'Recently active' : 'Offline';
+        
         const marker = L.marker(
           [agent.location.lat, agent.location.lng],
-          { icon: createAgentIcon(true) }
+          { icon: createAgentIcon(agent.status) }
         ).addTo(map);
         
         marker.bindPopup(`
           <div class="agent-popup">
-            <h3><a href="/agent.html?id=${agent.id}" style="color: inherit; text-decoration: none;">🤖 ${agent.name}</a></h3>
+            <h3><a href="/agent.html?id=${agent.id}" style="color: inherit; text-decoration: none;">${statusDot} ${agent.name}</a></h3>
             <div class="location">📍 ${agent.location.label || 'Location shared'}</div>
             <div class="activity">
+              <div class="activity-item"><strong>${statusText}</strong></div>
               <div class="activity-item">Member since ${new Date(agent.created_at).toLocaleDateString()}</div>
               <a href="/agent.html?id=${agent.id}" style="color: #6366f1; font-size: 11px;">View profile →</a>
             </div>

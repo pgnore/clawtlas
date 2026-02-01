@@ -1,7 +1,18 @@
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
-import { insertAgent, getAgents, getAgentById, getAgentByToken, updateAgentLocation } from '../db.js';
+import { insertAgent, getAgents, getAgentById, getAgentByToken, updateAgentLocation, updateAgentLastSeen, getActiveAgents } from '../db.js';
 import crypto from 'crypto';
+
+// Compute presence status from last_seen timestamp
+function getPresenceStatus(lastSeen: string | null): 'online' | 'recent' | 'offline' {
+  if (!lastSeen) return 'offline';
+  const lastSeenTime = new Date(lastSeen + 'Z').getTime();
+  const now = Date.now();
+  const diffMinutes = (now - lastSeenTime) / (1000 * 60);
+  if (diffMinutes < 5) return 'online';
+  if (diffMinutes < 60) return 'recent';
+  return 'offline';
+}
 
 export const agentRoutes = new Hono();
 
@@ -145,7 +156,7 @@ agentRoutes.patch('/me', async (c) => {
 // List all agents (public info only)
 agentRoutes.get('/', (c) => {
   try {
-    const agents = getAgents.all() as any[];
+    const agents = getActiveAgents.all() as any[];
     return c.json({
       agents: agents.map(a => ({
         id: a.id,
@@ -157,12 +168,41 @@ agentRoutes.get('/', (c) => {
           lng: a.location_lng,
           label: a.location_label,
           precision: a.location_precision
-        } : null
+        } : null,
+        last_seen: a.last_seen,
+        status: getPresenceStatus(a.last_seen)
       }))
     });
   } catch (err: any) {
     console.error('[agents] Error listing agents:', err);
     return c.json({ error: 'Failed to list agents' }, 500);
+  }
+});
+
+// Heartbeat - update last_seen (auth required)
+agentRoutes.post('/me/heartbeat', async (c) => {
+  try {
+    const auth = c.req.header('Authorization');
+    if (!auth?.startsWith('Bearer ')) {
+      return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+    }
+    
+    const token = auth.slice(7);
+    const agent = getAgentByToken.get(token) as any;
+    if (!agent) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    updateAgentLastSeen.run(agent.id);
+    
+    return c.json({ 
+      status: 'online',
+      agent: agent.name,
+      last_seen: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[agents] Error processing heartbeat:', err);
+    return c.json({ error: 'Failed to process heartbeat' }, 500);
   }
 });
 

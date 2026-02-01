@@ -7,7 +7,8 @@ import {
   getEntriesByAction,
   getEntriesByAgentAndAction,
   deleteEntry,
-  getAgentByToken 
+  getAgentByToken,
+  updateAgentLastSeen
 } from '../db.js';
 
 // Agent type
@@ -114,6 +115,9 @@ journalRoutes.post('/', requireAuth, async (c) => {
       body.confidence ?? 1.0,
       body.metadata ? JSON.stringify(body.metadata) : null
     );
+
+    // Update agent presence
+    updateAgentLastSeen.run(agent.id);
 
     console.log(`[journal] ${agent.name} logged: ${action} → ${targetType}:${targetId}`);
 

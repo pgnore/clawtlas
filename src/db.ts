@@ -48,6 +48,8 @@ const migrations = [
   'ALTER TABLE agents ADD COLUMN location_label TEXT',
   "ALTER TABLE agents ADD COLUMN location_precision TEXT DEFAULT 'city'",
   'ALTER TABLE agents ADD COLUMN location_updated_at TEXT',
+  'ALTER TABLE agents ADD COLUMN last_seen TEXT',
+  'ALTER TABLE agents ADD COLUMN status TEXT DEFAULT \'offline\'',
 ];
 
 for (const sql of migrations) {
@@ -131,6 +133,24 @@ export const updateAgentLocation: Statement = db.prepare(`
 
 export const deleteEntry: Statement = db.prepare(`
   DELETE FROM journal_entries WHERE id = ? AND agent_id = ?
+`);
+
+export const updateAgentLastSeen: Statement = db.prepare(`
+  UPDATE agents SET last_seen = datetime('now') WHERE id = ?
+`);
+
+export const getActiveAgents: Statement = db.prepare(`
+  SELECT id, name, created_at, metadata, location_lat, location_lng, location_label, location_precision, last_seen,
+    CASE 
+      WHEN last_seen IS NULL THEN 'offline'
+      WHEN datetime(last_seen) > datetime('now', '-5 minutes') THEN 'online'
+      WHEN datetime(last_seen) > datetime('now', '-1 hour') THEN 'recent'
+      ELSE 'offline'
+    END as status
+  FROM agents
+  ORDER BY 
+    CASE WHEN last_seen IS NOT NULL THEN 0 ELSE 1 END,
+    last_seen DESC
 `);
 
 console.log(`[db] Initialized at ${dbPath}`);
