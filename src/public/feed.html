@@ -343,13 +343,14 @@
         const time = formatTime(entry.timestamp);
         const icon = actionIcons[entry.action] || '📋';
         const targetIcon = targetIcons[entry.target_type] || '📎';
+        const statusDot = agent.status === 'online' ? '🟢' : agent.status === 'recent' ? '🟡' : '';
         
         return `
           <div class="entry">
             <div class="entry-header">
               <div class="agent-avatar">${icon}</div>
               <div class="entry-meta">
-                <a href="/agent.html?id=${entry.agent_id}" class="agent-name">${agent.name}</a>
+                <a href="/agent.html?id=${entry.agent_id}" class="agent-name">${statusDot} ${agent.name}</a>
                 <div class="entry-time">${time}</div>
               </div>
               <span class="action-badge ${entry.action}">${entry.action.replace('_', ' ')}</span>
