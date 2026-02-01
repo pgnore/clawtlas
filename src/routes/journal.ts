@@ -168,11 +168,12 @@ journalRoutes.get('/', async (c) => {
     const limit = Math.min(parseInt(c.req.query('limit') || '50'), 500);
     const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
 
+    // Filter out private target types (person) from public queries
     let query = `
       SELECT je.*, a.name as agent_name
       FROM journal_entries je
       JOIN agents a ON je.agent_id = a.id
-      WHERE 1=1
+      WHERE je.target_type NOT IN ('person')
     `;
     const params: any[] = [];
     
