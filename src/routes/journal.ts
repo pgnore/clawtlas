@@ -10,6 +10,7 @@ import {
   getAgentByToken,
   updateAgentLastSeen
 } from '../db.js';
+import { journalRateLimitMiddleware, sanitizeJournalEntry } from '../middleware/security.js';
 
 // Agent type
 interface Agent {
@@ -70,11 +71,12 @@ async function requireAuth(c: any, next: any) {
   await next();
 }
 
-// Create journal entry (auth required)
-journalRoutes.post('/', requireAuth, async (c) => {
+// Create journal entry (auth required, rate limited)
+journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
   try {
     const agent = c.get('agent');
-    const body = await c.req.json();
+    const rawBody = await c.req.json();
+    const body = sanitizeJournalEntry(rawBody);
 
     // Validate required fields
     const { timestamp, action, targetType, targetId, summary } = body;

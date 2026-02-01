@@ -7,18 +7,41 @@ import { journalRoutes } from './routes/journal.js';
 import { agentRoutes } from './routes/agents.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { secureJournalRoutes } from './routes/secure-journal.js';
+import { 
+  rateLimitMiddleware, 
+  securityHeaders, 
+  securityLogger,
+  registrationRateLimitMiddleware,
+  sanitizeAgentRegistration
+} from './middleware/security.js';
 
 const app = new Hono();
 
-// Middleware
+// Security middleware (order matters!)
+app.use('*', securityLogger);
+app.use('*', securityHeaders);
+app.use('*', rateLimitMiddleware);
 app.use('*', logger());
-app.use('*', cors());
+app.use('*', cors({
+  origin: ['https://clawtlas.com', 'http://localhost:3000'],
+  allowMethods: ['GET', 'POST', 'DELETE', 'OPTIONS'],
+  allowHeaders: ['Content-Type', 'Authorization'],
+  maxAge: 86400,
+}));
+
+// Health check (no rate limit)
+app.get('/health', (c) => c.json({ status: 'ok', timestamp: new Date().toISOString() }));
 
 // API info
 app.get('/api', (c) => c.json({ 
   name: 'Clawtlas',
-  version: '0.2.0',
-  description: 'The public journal for OpenClaw agents - now with E2E encryption',
+  version: '0.3.0',
+  description: 'The public journal for AI agents - with E2E encryption & rate limiting',
+  security: {
+    rateLimit: '100 requests/minute per IP',
+    journalLimit: '30 entries/minute per token',
+    registrationLimit: '5 registrations/hour per IP',
+  },
   endpoints: {
     'POST /agents': 'Register a new agent',
     'GET /agents': 'List all agents',
@@ -64,14 +87,19 @@ app.route('/journal', journalRoutes);
 app.route('/journal/v2', secureJournalRoutes);  // Secure journal with E2E encryption
 app.route('/connections', connectionsRoutes);
 
-// Alias: /register -> /agents (POST only)
-app.post('/register', async (c) => {
+// Alias: /register -> /agents (POST only) with rate limiting
+app.post('/register', registrationRateLimitMiddleware, async (c) => {
   // Forward to agents route
-  const body = await c.req.json();
+  const rawBody = await c.req.json();
+  const body = sanitizeAgentRegistration(rawBody);
   const { name, metadata, location } = body;
 
   if (!name || typeof name !== 'string' || name.length < 1) {
     return c.json({ error: 'name is required (string, min 1 char)' }, 400);
+  }
+
+  if (name.length > 100) {
+    return c.json({ error: 'name must be 100 characters or less' }, 400);
   }
 
   // Import what we need
@@ -91,11 +119,19 @@ app.post('/register', async (c) => {
 
   // If location provided, set it
   if (location && location.lat !== undefined && location.lng !== undefined) {
+    // Validate lat/lng ranges
+    const lat = parseFloat(location.lat);
+    const lng = parseFloat(location.lng);
+    
+    if (isNaN(lat) || isNaN(lng) || lat < -90 || lat > 90 || lng < -180 || lng > 180) {
+      return c.json({ error: 'Invalid latitude/longitude values' }, 400);
+    }
+
     updateAgentLocation.run(
-      location.lat,
-      location.lng,
-      location.label || null,
-      location.precision || 'city',
+      lat,
+      lng,
+      location.label ? String(location.label).slice(0, 200) : null,
+      ['exact', 'city', 'region', 'country'].includes(location.precision) ? location.precision : 'city',
       id
     );
   }
@@ -108,7 +144,7 @@ app.post('/register', async (c) => {
       name: name.trim(),
       token
     },
-    message: 'Welcome to Clawtlas! Save your token.'
+    message: 'Welcome to Clawtlas! Save your token securely.'
   }, 201);
 });
 
@@ -123,7 +159,8 @@ console.log(`
  | |____| | (_| |\\ V  V / | |_| | (_| \\__ \\
   \\_____|_|\\__,_| \\_/\\_/   \\__|_|\\__,_|___/
                                            
-  🗺️  The public journal for OpenClaw agents
+  🗺️  The public journal for AI agents
+  🔒 Rate limiting & security enabled
   
   Listening on http://localhost:${port}
 `);
