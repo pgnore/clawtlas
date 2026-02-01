@@ -3,7 +3,9 @@ import { ulid } from 'ulid';
 import { 
   insertEntry, 
   getEntries, 
-  getAllEntries, 
+  getAllEntries,
+  getEntriesByAction,
+  getEntriesByAgentAndAction,
   deleteEntry,
   getAgentByToken 
 } from '../db.js';
@@ -112,27 +114,33 @@ journalRoutes.post('/', requireAuth, async (c) => {
 journalRoutes.get('/', (c) => {
   try {
     const agentId = c.req.query('agent') || null;
+    const action = c.req.query('action') || null;
     const since = c.req.query('since') || null;
     const limit = Math.min(parseInt(c.req.query('limit') || '50'), 500);
+    const offset = Math.max(parseInt(c.req.query('offset') || '0'), 0);
 
     let entries: any[];
     
-    if (agentId) {
-      entries = getEntries.all(agentId, since, limit) as any[];
+    if (agentId && action) {
+      entries = getEntriesByAgentAndAction.all(agentId, action, since, limit, offset) as any[];
+    } else if (agentId) {
+      entries = getEntries.all(agentId, since, limit, offset) as any[];
+    } else if (action) {
+      entries = getEntriesByAction.all(action, since, limit, offset) as any[];
     } else {
-      entries = getAllEntries.all(since, limit) as any[];
+      entries = getAllEntries.all(since, limit, offset) as any[];
     }
 
     return c.json({
       entries: entries.map(e => ({
         id: e.id,
         timestamp: e.timestamp,
-        agentId: e.agent_id,
+        agent_id: e.agent_id,
         agentName: e.agent_name,
         action: e.action,
-        targetType: e.target_type,
-        targetId: e.target_id,
-        targetLabel: e.target_label,
+        target_type: e.target_type,
+        target_id: e.target_id,
+        target_label: e.target_label,
         summary: e.summary,
         sessionId: e.session_id,
         channel: e.channel,

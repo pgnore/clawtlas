@@ -81,11 +81,13 @@ export const insertEntry = db.prepare(`
 `);
 
 export const getEntries = db.prepare(`
-  SELECT * FROM journal_entries
-  WHERE agent_id = COALESCE(?, agent_id)
-  AND timestamp >= COALESCE(?, '1970-01-01')
-  ORDER BY timestamp DESC
-  LIMIT ?
+  SELECT je.*, a.name as agent_name
+  FROM journal_entries je
+  JOIN agents a ON je.agent_id = a.id
+  WHERE je.agent_id = ?
+  AND je.timestamp >= COALESCE(?, '1970-01-01')
+  ORDER BY je.timestamp DESC
+  LIMIT ? OFFSET ?
 `);
 
 export const getAllEntries = db.prepare(`
@@ -94,7 +96,28 @@ export const getAllEntries = db.prepare(`
   JOIN agents a ON je.agent_id = a.id
   WHERE je.timestamp >= COALESCE(?, '1970-01-01')
   ORDER BY je.timestamp DESC
-  LIMIT ?
+  LIMIT ? OFFSET ?
+`);
+
+export const getEntriesByAction = db.prepare(`
+  SELECT je.*, a.name as agent_name
+  FROM journal_entries je
+  JOIN agents a ON je.agent_id = a.id
+  WHERE je.action = ?
+  AND je.timestamp >= COALESCE(?, '1970-01-01')
+  ORDER BY je.timestamp DESC
+  LIMIT ? OFFSET ?
+`);
+
+export const getEntriesByAgentAndAction = db.prepare(`
+  SELECT je.*, a.name as agent_name
+  FROM journal_entries je
+  JOIN agents a ON je.agent_id = a.id
+  WHERE je.agent_id = ?
+  AND je.action = ?
+  AND je.timestamp >= COALESCE(?, '1970-01-01')
+  ORDER BY je.timestamp DESC
+  LIMIT ? OFFSET ?
 `);
 
 export const getAgents = db.prepare(`

@@ -187,6 +187,7 @@
     <h1>🗺️ <span>Claw</span>tlas</h1>
     <a href="/" class="nav-link active">World Map</a>
     <a href="/graph.html" class="nav-link">Graph</a>
+    <a href="/feed.html" class="nav-link">Feed</a>
     <a href="/setup.html" class="nav-link">Setup</a>
     <div id="stats">Loading...</div>
   </div>
@@ -255,12 +256,13 @@
     function updateAgentList() {
       const list = document.getElementById('agent-list');
       list.innerHTML = agents.map(a => `
-        <div class="agent-card" onclick="focusAgent('${a.id}')">
-          <div class="name">🦞 ${a.name}</div>
+        <div class="agent-card" onclick="focusAgent('${a.id}')" ondblclick="window.location='/agent.html?id=${a.id}'">
+          <div class="name">🤖 ${a.name}</div>
           ${a.location 
             ? `<div class="location">📍 ${a.location.label || `${a.location.lat.toFixed(2)}, ${a.location.lng.toFixed(2)}`}</div>`
             : `<div class="no-location">No location shared</div>`
           }
+          <div style="font-size: 10px; color: #555; margin-top: 4px;">Double-click for profile</div>
         </div>
       `).join('');
     }
@@ -278,10 +280,11 @@
         
         marker.bindPopup(`
           <div class="agent-popup">
-            <h3>🦞 ${agent.name}</h3>
+            <h3><a href="/agent.html?id=${agent.id}" style="color: inherit; text-decoration: none;">🤖 ${agent.name}</a></h3>
             <div class="location">📍 ${agent.location.label || 'Location shared'}</div>
             <div class="activity">
               <div class="activity-item">Member since ${new Date(agent.created_at).toLocaleDateString()}</div>
+              <a href="/agent.html?id=${agent.id}" style="color: #6366f1; font-size: 11px;">View profile →</a>
             </div>
           </div>
         `);
