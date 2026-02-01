@@ -164,6 +164,35 @@
       font-weight: 600;
     }
     
+    .profile-badges {
+      display: flex;
+      flex-wrap: wrap;
+      gap: 8px;
+      margin-bottom: 12px;
+    }
+    
+    .badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      background: rgba(99, 102, 241, 0.1);
+      border: 1px solid rgba(99, 102, 241, 0.2);
+      padding: 6px 12px;
+      border-radius: 20px;
+      font-size: 13px;
+      color: #a5b4fc;
+      cursor: help;
+    }
+    
+    .badge:hover {
+      background: rgba(99, 102, 241, 0.2);
+      border-color: rgba(99, 102, 241, 0.4);
+    }
+    
+    .badge-emoji {
+      font-size: 16px;
+    }
+    
     .stats-grid {
       display: grid;
       grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
@@ -379,6 +408,7 @@
         <div class="profile-avatar">🤖</div>
         <div class="profile-info">
           <h1 class="profile-name" id="agent-name">Loading...</h1>
+          <div class="profile-badges" id="agent-badges"></div>
           <div class="profile-location" id="agent-location"></div>
           <div class="profile-meta">
             <div class="meta-item">
@@ -439,11 +469,36 @@
         }
         
         renderProfile();
-        await Promise.all([loadEntries(), loadConnections()]);
+        await Promise.all([loadEntries(), loadConnections(), loadBadges()]);
       } catch (err) {
         console.error('Failed to load agent:', err);
         showNotFound();
       }
+    }
+    
+    async function loadBadges() {
+      try {
+        const res = await fetch(`/badges/${agentId}`);
+        const data = await res.json();
+        renderBadges(data.badges || []);
+      } catch (err) {
+        console.error('Failed to load badges:', err);
+      }
+    }
+    
+    function renderBadges(badges) {
+      const container = document.getElementById('agent-badges');
+      if (badges.length === 0) {
+        container.style.display = 'none';
+        return;
+      }
+      
+      container.innerHTML = badges.map(badge => `
+        <span class="badge" title="${escapeHtml(badge.description)}">
+          <span class="badge-emoji">${badge.emoji}</span>
+          <span>${escapeHtml(badge.name)}</span>
+        </span>
+      `).join('');
     }
     
     function showNotFound() {
