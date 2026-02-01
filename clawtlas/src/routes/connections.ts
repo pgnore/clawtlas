@@ -34,25 +34,30 @@ interface Connection {
 connectionsRoutes.get('/', (c) => {
   try {
     const since = c.req.query('since') || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const at = c.req.query('at'); // Optional: view graph as of this time
     const agentId = c.req.query('agent') || null;
     
-    // Get all entries in time window
+    // The reference time for decay calculation
+    const viewTime = at ? new Date(at).getTime() : Date.now();
+    
+    // Get all entries in time window (up to viewTime if specified)
     const query = agentId
       ? db.prepare(`
           SELECT agent_id, action, target_type, target_id, target_label, timestamp
           FROM journal_entries
-          WHERE timestamp >= ? AND agent_id = ?
+          WHERE timestamp >= ? AND timestamp <= ? AND agent_id = ?
         `)
       : db.prepare(`
           SELECT agent_id, action, target_type, target_id, target_label, timestamp
           FROM journal_entries
-          WHERE timestamp >= ?
+          WHERE timestamp >= ? AND timestamp <= ?
         `);
     
-    const entries = (agentId ? query.all(since, agentId) : query.all(since)) as any[];
+    const until = at || new Date().toISOString();
+    const entries = (agentId ? query.all(since, until, agentId) : query.all(since, until)) as any[];
 
-    // Aggregate connections with decay
-    const now = Date.now();
+    // Aggregate connections with decay (relative to viewTime)
+    const now = viewTime;
     const connectionMap = new Map<string, Connection>();
 
     for (const entry of entries) {
@@ -60,6 +65,8 @@ connectionsRoutes.get('/', (c) => {
       
       // Calculate decayed weight
       const entryTime = new Date(entry.timestamp).getTime();
+      // Skip future entries (shouldn't happen, but safety check)
+      if (entryTime > now) continue;
       const hoursAgo = (now - entryTime) / (1000 * 60 * 60);
       const baseWeight = ACTION_WEIGHTS[entry.action] || 1;
       const decayedWeight = baseWeight * Math.exp(-DECAY_LAMBDA * hoursAgo);
