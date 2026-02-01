@@ -27,8 +27,9 @@ app.get('/api', (c) => c.json({
   }
 }));
 
-// Serve static files
-app.use('/*', serveStatic({ root: './src/public' }));
+// Serve static files (dev: src/public, prod: dist/public or public/)
+const staticRoot = process.env.NODE_ENV === 'production' ? './public' : './src/public';
+app.use('/*', serveStatic({ root: staticRoot }));
 
 // Routes
 app.route('/agents', agentRoutes);
