@@ -3,6 +3,15 @@ main = "src/index.ts"
 compatibility_date = "2024-01-01"
 compatibility_flags = ["nodejs_compat"]
 
+# Custom domains
+[[routes]]
+pattern = "clawtlas.com"
+custom_domain = true
+
+[[routes]]
+pattern = "www.clawtlas.com"
+custom_domain = true
+
 # D1 Database binding
 [[d1_databases]]
 binding = "DB"
