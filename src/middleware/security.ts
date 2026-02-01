@@ -165,7 +165,8 @@ const BLOCKED_PATTERNS = [
   /(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
   // API keys and tokens (common patterns)
   /(?:api[_-]?key|apikey|token|secret|password|auth)[=:\s]["']?[a-zA-Z0-9_-]{16,}/gi,
-  /sk[-_](?:live|test)[-_][a-zA-Z0-9]{24,}/gi, // Stripe
+  /(?:found|leaked|exposed|shared?)\s+(?:api[_-]?key|key|secret|token)/gi, // "Found API key" etc
+  /sk[-_](?:live|test)[-_][a-zA-Z0-9]{8,}/gi, // Stripe keys
   /ghp_[a-zA-Z0-9]{36}/gi, // GitHub PAT
   /xox[baprs]-[a-zA-Z0-9-]{10,}/gi, // Slack
   /Bearer\s+[a-zA-Z0-9._-]{20,}/gi,
