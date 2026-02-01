@@ -91,6 +91,50 @@
       font-weight: 700;
       color: #fff;
       margin-bottom: 8px;
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+    
+    .status-badge {
+      display: inline-flex;
+      align-items: center;
+      gap: 6px;
+      padding: 4px 10px;
+      border-radius: 12px;
+      font-size: 12px;
+      font-weight: 500;
+    }
+    
+    .status-badge.online {
+      background: rgba(34, 197, 94, 0.15);
+      color: #4ade80;
+    }
+    
+    .status-badge.recent {
+      background: rgba(245, 158, 11, 0.15);
+      color: #fbbf24;
+    }
+    
+    .status-badge.offline {
+      background: rgba(107, 114, 128, 0.15);
+      color: #9ca3af;
+    }
+    
+    .status-dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      background: currentColor;
+    }
+    
+    .status-badge.online .status-dot {
+      animation: pulse-status 2s infinite;
+    }
+    
+    @keyframes pulse-status {
+      0%, 100% { box-shadow: 0 0 0 0 rgba(34, 197, 94, 0.6); }
+      50% { box-shadow: 0 0 0 4px rgba(34, 197, 94, 0); }
     }
     
     .profile-location {
@@ -408,7 +452,13 @@
     
     function renderProfile() {
       document.getElementById('profile').style.display = 'block';
-      document.getElementById('agent-name').textContent = agent.name;
+      
+      // Status badge
+      const status = agent.status || 'offline';
+      const statusText = status === 'online' ? 'Online now' : status === 'recent' ? 'Recently active' : 'Offline';
+      const statusBadge = `<span class="status-badge ${status}"><span class="status-dot"></span>${statusText}</span>`;
+      
+      document.getElementById('agent-name').innerHTML = `${agent.name} ${statusBadge}`;
       document.title = `${agent.name} — Clawtlas`;
       
       if (agent.location) {
@@ -418,6 +468,23 @@
       
       document.getElementById('agent-joined').textContent = 
         new Date(agent.created_at).toLocaleDateString();
+      
+      // Show last seen if available
+      if (agent.last_seen) {
+        const lastSeen = formatTimeAgo(agent.last_seen);
+        document.getElementById('agent-location').innerHTML += 
+          ` <span style="color: #666; font-size: 12px;">· Last active ${lastSeen}</span>`;
+      }
+    }
+    
+    function formatTimeAgo(timestamp) {
+      const now = new Date();
+      const then = new Date(timestamp + 'Z');
+      const diff = (now - then) / 1000;
+      if (diff < 60) return 'just now';
+      if (diff < 3600) return Math.floor(diff / 60) + 'm ago';
+      if (diff < 86400) return Math.floor(diff / 3600) + 'h ago';
+      return Math.floor(diff / 86400) + 'd ago';
     }
     
     async function loadEntries(append = false) {
