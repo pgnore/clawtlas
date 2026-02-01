@@ -156,12 +156,83 @@ export function sanitizeString(input: string, maxLength: number = 1000): string 
 }
 
 /**
+ * Content filtering patterns (PII, secrets, crypto)
+ */
+const BLOCKED_PATTERNS = [
+  // Email addresses
+  /[a-zA-Z0-9._%+-]+@[a-zA-Z0-9.-]+\.[a-zA-Z]{2,}/gi,
+  // Phone numbers (various formats)
+  /(\+?1?[-.\s]?)?\(?\d{3}\)?[-.\s]?\d{3}[-.\s]?\d{4}/g,
+  // API keys and tokens (common patterns)
+  /(?:api[_-]?key|apikey|token|secret|password|auth)[=:\s]["']?[a-zA-Z0-9_-]{16,}/gi,
+  /sk[-_](?:live|test)[-_][a-zA-Z0-9]{24,}/gi, // Stripe
+  /ghp_[a-zA-Z0-9]{36}/gi, // GitHub PAT
+  /xox[baprs]-[a-zA-Z0-9-]{10,}/gi, // Slack
+  /Bearer\s+[a-zA-Z0-9._-]{20,}/gi,
+  // AWS keys
+  /AKIA[A-Z0-9]{16}/g,
+  /(?:aws[_-]?(?:access|secret)[_-]?(?:key)?[_-]?(?:id)?)[=:\s]["']?[a-zA-Z0-9/+=]{20,}/gi,
+  // Private keys
+  /-----BEGIN (?:RSA |EC |DSA |OPENSSH )?PRIVATE KEY-----/gi,
+  // Crypto wallet addresses
+  /0x[a-fA-F0-9]{40}/g, // Ethereum
+  /[13][a-km-zA-HJ-NP-Z1-9]{25,34}/g, // Bitcoin
+  /(?:bc1|tb1)[a-zA-HJ-NP-Z0-9]{39,59}/g, // Bitcoin bech32
+  // Crypto-related terms (catch promotion)
+  /\b(?:crypto|bitcoin|btc|ethereum|eth|nft|blockchain|web3|defi|token\s?sale|ico|airdrop|mint|wallet\s?connect)\b/gi,
+  // SSN
+  /\b\d{3}[-]?\d{2}[-]?\d{4}\b/g,
+  // Credit card numbers
+  /\b(?:\d{4}[-\s]?){3}\d{4}\b/g,
+];
+
+/**
+ * Check if content contains blocked patterns
+ * Returns { blocked: boolean, reason?: string }
+ */
+export function checkContentViolations(text: string): { blocked: boolean; reason?: string } {
+  if (!text) return { blocked: false };
+  
+  const lowerText = text.toLowerCase();
+  
+  // Check each pattern
+  for (const pattern of BLOCKED_PATTERNS) {
+    pattern.lastIndex = 0; // Reset regex state
+    if (pattern.test(text)) {
+      // Determine the reason based on pattern
+      const patternStr = pattern.toString().toLowerCase();
+      let reason = 'Contains prohibited content';
+      
+      if (patternStr.includes('email') || patternStr.includes('@')) {
+        reason = 'Contains email address (PII not allowed)';
+      } else if (patternStr.includes('phone') || patternStr.includes('\\d{3}')) {
+        reason = 'Contains phone number (PII not allowed)';
+      } else if (patternStr.includes('api') || patternStr.includes('key') || patternStr.includes('token') || patternStr.includes('secret')) {
+        reason = 'Contains API key or secret (security risk)';
+      } else if (patternStr.includes('private key')) {
+        reason = 'Contains private key (security risk)';
+      } else if (patternStr.includes('0x') || patternStr.includes('crypto') || patternStr.includes('bitcoin') || patternStr.includes('nft')) {
+        reason = 'Crypto/blockchain content not allowed';
+      } else if (patternStr.includes('ssn') || patternStr.includes('\\d{3}[-]?\\d{2}')) {
+        reason = 'Contains SSN (PII not allowed)';
+      } else if (patternStr.includes('credit') || patternStr.includes('\\d{4}[-\\s]?')) {
+        reason = 'Contains credit card number (PII not allowed)';
+      }
+      
+      return { blocked: true, reason };
+    }
+  }
+  
+  return { blocked: false };
+}
+
+/**
  * Validate and sanitize journal entry
  */
 export function sanitizeJournalEntry(body: any): any {
   return {
     ...body,
-    summary: body.summary ? sanitizeString(body.summary, 280) : undefined,
+    summary: body.summary ? sanitizeString(body.summary, 500) : undefined,
     targetId: body.targetId ? sanitizeString(body.targetId, 500) : undefined,
     targetLabel: body.targetLabel ? sanitizeString(body.targetLabel, 200) : undefined,
     sessionId: body.sessionId ? sanitizeString(body.sessionId, 100) : undefined,

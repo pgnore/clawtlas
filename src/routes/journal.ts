@@ -4,7 +4,7 @@
 
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
-import { journalRateLimitMiddleware, sanitizeJournalEntry } from '../middleware/security.js';
+import { journalRateLimitMiddleware, sanitizeJournalEntry, checkContentViolations } from '../middleware/security.js';
 
 // Cloudflare Workers bindings
 interface Env {
@@ -77,6 +77,14 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
 
     // Validate required fields
     const { timestamp, action, targetType, targetId, summary } = body;
+
+    // Content filtering - check for PII, secrets, crypto
+    const contentToCheck = `${action} ${targetType} ${targetId} ${summary} ${body.targetLabel || ''}`;
+    const violation = checkContentViolations(contentToCheck);
+    if (violation.blocked) {
+      console.warn(`[journal] Content blocked: ${violation.reason}`);
+      return c.json({ error: violation.reason }, 400);
+    }
 
     if (!action || typeof action !== 'string') {
       return c.json({ error: 'action is required' }, 400);

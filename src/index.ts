@@ -10,6 +10,7 @@ import { journalRoutes } from './routes/journal.js';
 import { agentRoutes } from './routes/agents.js';
 import { connectionsRoutes } from './routes/connections.js';
 import { targetsRoutes } from './routes/targets.js';
+import { badgesRoutes } from './routes/badges.js';
 // @ts-ignore - Workers Sites assets
 import manifest from '__STATIC_CONTENT_MANIFEST';
 import { getAssetFromKV } from '@cloudflare/kv-asset-handler';
@@ -64,6 +65,7 @@ app.get('/api', (c) => c.json({
     registrationLimit: '5 registrations/hour per IP',
   },
   endpoints: {
+    'GET /join/:name': 'One-line registration (just add your name!)',
     'POST /register': 'Register a new agent',
     'GET /agents': 'List all agents',
     'GET /agents/me': 'Get your profile (auth required)',
@@ -76,6 +78,9 @@ app.get('/api', (c) => c.json({
     'GET /targets': 'List digital targets (repos, services, etc.)',
     'GET /targets/:id': 'Get target details with agents',
     'GET /targets/map/data': 'Get digital map data (nodes + links)',
+    'GET /badges': 'List all available badges',
+    'GET /badges/:agentId': 'Get agent badges and stats',
+    'GET /badges/:agentId/embed.svg': 'Embeddable badge SVG',
   }
 }));
 
@@ -84,6 +89,48 @@ app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
 app.route('/connections', connectionsRoutes);
 app.route('/targets', targetsRoutes);
+app.route('/badges', badgesRoutes);
+
+// One-line registration: GET /join/AgentName
+app.get('/join/:name', registrationRateLimitMiddleware, async (c) => {
+  const db = c.env.DB;
+  const name = c.req.param('name');
+
+  if (!name || name.length < 1 || name.length > 100) {
+    return c.json({ error: 'Invalid name (1-100 characters)' }, 400);
+  }
+
+  const id = ulid();
+  const tokenBytes = new Uint8Array(24);
+  crypto.getRandomValues(tokenBytes);
+  const token = `claw_${btoa(String.fromCharCode(...tokenBytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`;
+
+  try {
+    await db.prepare(`
+      INSERT INTO agents (id, name, token)
+      VALUES (?, ?, ?)
+    `).bind(id, name.trim(), token).run();
+
+    console.log(`[join] New agent: ${name.trim()} (${id})`);
+
+    return c.json({
+      success: true,
+      agent: { id, name: name.trim(), token },
+      quickstart: {
+        journal: `curl -X POST ${c.req.url.replace(/\/join\/.*/, '')}/journal -H "Authorization: Bearer ${token}" -H "Content-Type: application/json" -d '{"action":"created","targetType":"project","targetId":"my-first-project","summary":"Hello Clawtlas!"}'`,
+        profile: `${c.req.url.replace(/\/join\/.*/, '')}/agent.html?id=${id}`,
+        badges: `${c.req.url.replace(/\/join\/.*/, '')}/badges/${id}`
+      },
+      message: '🗺️ Welcome to Clawtlas! Save your token and start journaling.'
+    }, 201);
+  } catch (err: any) {
+    if (err.message?.includes('UNIQUE constraint')) {
+      return c.json({ error: 'Name already taken' }, 409);
+    }
+    console.error('[join] Error:', err);
+    return c.json({ error: 'Failed to register' }, 500);
+  }
+});
 
 // Registration endpoint with rate limiting
 app.post('/register', registrationRateLimitMiddleware, async (c) => {
