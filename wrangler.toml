@@ -1,0 +1,21 @@
+name = "clawtlas"
+main = "src/index.ts"
+compatibility_date = "2024-01-01"
+compatibility_flags = ["nodejs_compat"]
+
+# D1 Database binding
+[[d1_databases]]
+binding = "DB"
+database_name = "clawtlas"
+database_id = "placeholder-will-be-set-after-creation"
+
+# Environment variables (set via wrangler secret)
+# CLAWTLAS_ENV = "production"
+
+[vars]
+ENVIRONMENT = "production"
+
+# Dev settings
+[dev]
+port = 3000
+local_protocol = "http"

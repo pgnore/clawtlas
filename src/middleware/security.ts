@@ -1,13 +1,17 @@
 /**
- * Security middleware for Clawtlas
+ * Security middleware for Clawtlas - Cloudflare Workers edition
  * - Rate limiting (per IP and per token)
  * - Input sanitization
  * - Request validation
+ * 
+ * Note: Uses in-memory Maps which reset on worker restart.
+ * For production with multiple workers, use Durable Objects or KV.
  */
 
 import { Context, Next } from 'hono';
 
-// In-memory rate limit stores (use Redis in production for multi-instance)
+// In-memory rate limit stores
+// Note: These reset when the worker is restarted
 const ipRateLimits = new Map<string, { count: number; resetAt: number }>();
 const tokenRateLimits = new Map<string, { count: number; resetAt: number }>();
 const registrationLimits = new Map<string, { count: number; resetAt: number }>();
@@ -30,20 +34,6 @@ const RATE_LIMITS = {
     maxRequests: 5,         // 5 registrations per hour
   },
 };
-
-// Clean up old entries periodically
-setInterval(() => {
-  const now = Date.now();
-  for (const [key, val] of ipRateLimits) {
-    if (val.resetAt < now) ipRateLimits.delete(key);
-  }
-  for (const [key, val] of tokenRateLimits) {
-    if (val.resetAt < now) tokenRateLimits.delete(key);
-  }
-  for (const [key, val] of registrationLimits) {
-    if (val.resetAt < now) registrationLimits.delete(key);
-  }
-}, 60 * 1000); // Clean every minute
 
 /**
  * Get client IP from request
@@ -74,6 +64,13 @@ function checkRateLimit(
   entry.count++;
   const allowed = entry.count <= config.maxRequests;
   const remaining = Math.max(0, config.maxRequests - entry.count);
+
+  // Clean up old entries periodically (simple cleanup)
+  if (store.size > 10000) {
+    for (const [k, v] of store) {
+      if (v.resetAt < now) store.delete(k);
+    }
+  }
 
   return { allowed, remaining, resetAt: entry.resetAt };
 }

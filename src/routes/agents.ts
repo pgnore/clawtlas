@@ -1,7 +1,28 @@
+/**
+ * Agent routes - Cloudflare D1 edition
+ */
+
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
-import { insertAgent, getAgents, getAgentById, getAgentByToken, updateAgentLocation, updateAgentLastSeen, getActiveAgents } from '../db.js';
-import crypto from 'crypto';
+
+// Cloudflare Workers bindings
+interface Env {
+  DB: D1Database;
+}
+
+interface Agent {
+  id: string;
+  name: string;
+  token: string;
+  created_at: string;
+  metadata?: string;
+  location_lat?: number;
+  location_lng?: number;
+  location_label?: string;
+  location_precision?: string;
+  location_updated_at?: string;
+  last_seen?: string;
+}
 
 // Compute presence status from last_seen timestamp
 function getPresenceStatus(lastSeen: string | null): 'online' | 'recent' | 'offline' {
@@ -14,16 +35,19 @@ function getPresenceStatus(lastSeen: string | null): 'online' | 'recent' | 'offl
   return 'offline';
 }
 
-export const agentRoutes = new Hono();
+export const agentRoutes = new Hono<{ Bindings: Env }>();
 
 // Generate a secure token
 function generateToken(): string {
-  return `claw_${crypto.randomBytes(24).toString('base64url')}`;
+  const tokenBytes = new Uint8Array(24);
+  crypto.getRandomValues(tokenBytes);
+  return `claw_${btoa(String.fromCharCode(...tokenBytes)).replace(/\+/g, '-').replace(/\//g, '_').replace(/=/g, '')}`;
 }
 
 // Register a new agent
 agentRoutes.post('/', async (c) => {
   try {
+    const db = c.env.DB;
     const body = await c.req.json();
     const { name, metadata, location } = body;
 
@@ -34,22 +58,29 @@ agentRoutes.post('/', async (c) => {
     const id = ulid();
     const token = generateToken();
 
-    insertAgent.run(
+    await db.prepare(`
+      INSERT INTO agents (id, name, token, metadata)
+      VALUES (?, ?, ?, ?)
+    `).bind(
       id,
       name.trim(),
       token,
       metadata ? JSON.stringify(metadata) : null
-    );
+    ).run();
 
     // If location provided at registration, set it
     if (location && location.lat !== undefined && location.lng !== undefined) {
-      updateAgentLocation.run(
+      await db.prepare(`
+        UPDATE agents 
+        SET location_lat = ?, location_lng = ?, location_label = ?, location_precision = ?, location_updated_at = datetime('now')
+        WHERE id = ?
+      `).bind(
         location.lat,
         location.lng,
         location.label || null,
         location.precision || 'city',
         id
-      );
+      ).run();
     }
 
     console.log(`[agents] New agent registered: ${name.trim()} (${id})`);
@@ -69,15 +100,17 @@ agentRoutes.post('/', async (c) => {
 });
 
 // Get current agent profile (auth required)
-agentRoutes.get('/me', (c) => {
+agentRoutes.get('/me', async (c) => {
   try {
+    const db = c.env.DB;
     const auth = c.req.header('Authorization');
     if (!auth?.startsWith('Bearer ')) {
       return c.json({ error: 'Missing or invalid Authorization header' }, 401);
     }
     
     const token = auth.slice(7);
-    const agent = getAgentByToken.get(token) as any;
+    const agent = await db.prepare('SELECT * FROM agents WHERE token = ?').bind(token).first<Agent>();
+    
     if (!agent) {
       return c.json({ error: 'Invalid token' }, 401);
     }
@@ -103,13 +136,15 @@ agentRoutes.get('/me', (c) => {
 // Update current agent (auth required)
 agentRoutes.patch('/me', async (c) => {
   try {
+    const db = c.env.DB;
     const auth = c.req.header('Authorization');
     if (!auth?.startsWith('Bearer ')) {
       return c.json({ error: 'Missing or invalid Authorization header' }, 401);
     }
     
     const token = auth.slice(7);
-    const agent = getAgentByToken.get(token) as any;
+    const agent = await db.prepare('SELECT * FROM agents WHERE token = ?').bind(token).first<Agent>();
+    
     if (!agent) {
       return c.json({ error: 'Invalid token' }, 401);
     }
@@ -120,31 +155,38 @@ agentRoutes.patch('/me', async (c) => {
     if ('location' in body) {
       if (body.location === null) {
         // Clear location
-        updateAgentLocation.run(null, null, null, 'hidden', agent.id);
+        await db.prepare(`
+          UPDATE agents SET location_lat = NULL, location_lng = NULL, location_label = NULL, location_precision = 'hidden'
+          WHERE id = ?
+        `).bind(agent.id).run();
         console.log(`[agents] ${agent.name} cleared location`);
       } else if (body.location.lat !== undefined && body.location.lng !== undefined) {
         // Update location
-        updateAgentLocation.run(
+        await db.prepare(`
+          UPDATE agents 
+          SET location_lat = ?, location_lng = ?, location_label = ?, location_precision = ?, location_updated_at = datetime('now')
+          WHERE id = ?
+        `).bind(
           body.location.lat,
           body.location.lng,
           body.location.label || null,
           body.location.precision || 'city',
           agent.id
-        );
+        ).run();
         console.log(`[agents] ${agent.name} updated location: ${body.location.label || 'unlabeled'}`);
       }
     }
 
     // Return updated profile
-    const updated = getAgentByToken.get(token) as any;
+    const updated = await db.prepare('SELECT * FROM agents WHERE id = ?').bind(agent.id).first<Agent>();
     return c.json({
-      id: updated.id,
-      name: updated.name,
-      location: updated.location_lat ? {
-        lat: updated.location_lat,
-        lng: updated.location_lng,
-        label: updated.location_label,
-        precision: updated.location_precision
+      id: updated!.id,
+      name: updated!.name,
+      location: updated!.location_lat ? {
+        lat: updated!.location_lat,
+        lng: updated!.location_lng,
+        label: updated!.location_label,
+        precision: updated!.location_precision
       } : null
     });
   } catch (err: any) {
@@ -154,11 +196,19 @@ agentRoutes.patch('/me', async (c) => {
 });
 
 // List all agents (public info only)
-agentRoutes.get('/', (c) => {
+agentRoutes.get('/', async (c) => {
   try {
-    const agents = getActiveAgents.all() as any[];
+    const db = c.env.DB;
+    const { results: agents } = await db.prepare(`
+      SELECT id, name, created_at, metadata, location_lat, location_lng, location_label, location_precision, last_seen
+      FROM agents
+      ORDER BY 
+        CASE WHEN last_seen IS NOT NULL THEN 0 ELSE 1 END,
+        last_seen DESC
+    `).all<Agent>();
+
     return c.json({
-      agents: agents.map(a => ({
+      agents: (agents || []).map(a => ({
         id: a.id,
         name: a.name,
         created_at: a.created_at,
@@ -170,7 +220,7 @@ agentRoutes.get('/', (c) => {
           precision: a.location_precision
         } : null,
         last_seen: a.last_seen,
-        status: getPresenceStatus(a.last_seen)
+        status: getPresenceStatus(a.last_seen || null)
       }))
     });
   } catch (err: any) {
@@ -182,18 +232,20 @@ agentRoutes.get('/', (c) => {
 // Heartbeat - update last_seen (auth required)
 agentRoutes.post('/me/heartbeat', async (c) => {
   try {
+    const db = c.env.DB;
     const auth = c.req.header('Authorization');
     if (!auth?.startsWith('Bearer ')) {
       return c.json({ error: 'Missing or invalid Authorization header' }, 401);
     }
     
     const token = auth.slice(7);
-    const agent = getAgentByToken.get(token) as any;
+    const agent = await db.prepare('SELECT * FROM agents WHERE token = ?').bind(token).first<Agent>();
+    
     if (!agent) {
       return c.json({ error: 'Invalid token' }, 401);
     }
 
-    updateAgentLastSeen.run(agent.id);
+    await db.prepare('UPDATE agents SET last_seen = datetime(\'now\') WHERE id = ?').bind(agent.id).run();
     
     return c.json({ 
       status: 'online',
@@ -207,18 +259,21 @@ agentRoutes.post('/me/heartbeat', async (c) => {
 });
 
 // Get single agent
-agentRoutes.get('/:id', (c) => {
+agentRoutes.get('/:id', async (c) => {
   try {
-    const agent = getAgentById.get(c.req.param('id')) as any;
+    const db = c.env.DB;
+    const agent = await db.prepare('SELECT * FROM agents WHERE id = ?').bind(c.req.param('id')).first<Agent>();
+    
     if (!agent) {
       return c.json({ error: 'Agent not found' }, 404);
     }
+    
     return c.json({
       id: agent.id,
       name: agent.name,
       created_at: agent.created_at,
       metadata: agent.metadata ? JSON.parse(agent.metadata) : null,
-      location: agent.location_precision !== 'hidden' ? {
+      location: agent.location_precision !== 'hidden' && agent.location_lat ? {
         lat: agent.location_lat,
         lng: agent.location_lng,
         label: agent.location_label,
@@ -235,13 +290,15 @@ agentRoutes.get('/:id', (c) => {
 // Update agent location (auth required)
 agentRoutes.patch('/me/location', async (c) => {
   try {
+    const db = c.env.DB;
     const auth = c.req.header('Authorization');
     if (!auth?.startsWith('Bearer ')) {
       return c.json({ error: 'Missing or invalid Authorization header' }, 401);
     }
     
     const token = auth.slice(7);
-    const agent = getAgentByToken.get(token) as any;
+    const agent = await db.prepare('SELECT * FROM agents WHERE token = ?').bind(token).first<Agent>();
+    
     if (!agent) {
       return c.json({ error: 'Invalid token' }, 401);
     }
@@ -257,7 +314,10 @@ agentRoutes.patch('/me/location', async (c) => {
 
     // If hiding, clear location data
     if (precision === 'hidden') {
-      updateAgentLocation.run(null, null, null, 'hidden', agent.id);
+      await db.prepare(`
+        UPDATE agents SET location_lat = NULL, location_lng = NULL, location_label = NULL, location_precision = 'hidden'
+        WHERE id = ?
+      `).bind(agent.id).run();
       return c.json({ status: 'location hidden' });
     }
 
@@ -270,13 +330,11 @@ agentRoutes.patch('/me/location', async (c) => {
       return c.json({ error: 'Invalid coordinates' }, 400);
     }
 
-    updateAgentLocation.run(
-      lat,
-      lng,
-      label || null,
-      precision || 'city',
-      agent.id
-    );
+    await db.prepare(`
+      UPDATE agents 
+      SET location_lat = ?, location_lng = ?, location_label = ?, location_precision = ?, location_updated_at = datetime('now')
+      WHERE id = ?
+    `).bind(lat, lng, label || null, precision || 'city', agent.id).run();
 
     console.log(`[agents] ${agent.name} updated location: ${label || `${lat},${lng}`} (${precision || 'city'})`);
 

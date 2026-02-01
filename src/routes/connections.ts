@@ -1,7 +1,30 @@
-import { Hono } from 'hono';
-import { db } from '../db.js';
+/**
+ * Connections routes - Cloudflare D1 edition
+ * Builds the connection graph from journal entries
+ */
 
-export const connectionsRoutes = new Hono();
+import { Hono } from 'hono';
+
+// Cloudflare Workers bindings
+interface Env {
+  DB: D1Database;
+}
+
+interface JournalEntry {
+  agent_id: string;
+  action: string;
+  target_type: string;
+  target_id: string;
+  target_label?: string;
+  timestamp: string;
+}
+
+interface Agent {
+  id: string;
+  name: string;
+}
+
+export const connectionsRoutes = new Hono<{ Bindings: Env }>();
 
 // Decay constant: ln(2) / 72 hours
 const DECAY_LAMBDA = Math.log(2) / 72;
@@ -31,36 +54,38 @@ interface Connection {
 }
 
 // Get connection graph with decay applied
-connectionsRoutes.get('/', (c) => {
+connectionsRoutes.get('/', async (c) => {
   try {
+    const db = c.env.DB;
     const since = c.req.query('since') || new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
     const at = c.req.query('at'); // Optional: view graph as of this time
     const agentId = c.req.query('agent') || null;
     
     // The reference time for decay calculation
     const viewTime = at ? new Date(at).getTime() : Date.now();
+    const until = at || new Date().toISOString();
     
     // Get all entries in time window (up to viewTime if specified)
-    const query = agentId
-      ? db.prepare(`
-          SELECT agent_id, action, target_type, target_id, target_label, timestamp
-          FROM journal_entries
-          WHERE timestamp >= ? AND timestamp <= ? AND agent_id = ?
-        `)
-      : db.prepare(`
-          SELECT agent_id, action, target_type, target_id, target_label, timestamp
-          FROM journal_entries
-          WHERE timestamp >= ? AND timestamp <= ?
-        `);
+    let query = `
+      SELECT agent_id, action, target_type, target_id, target_label, timestamp
+      FROM journal_entries
+      WHERE timestamp >= ? AND timestamp <= ?
+    `;
+    const params: any[] = [since, until];
     
-    const until = at || new Date().toISOString();
-    const entries = (agentId ? query.all(since, until, agentId) : query.all(since, until)) as any[];
+    if (agentId) {
+      query += ` AND agent_id = ?`;
+      params.push(agentId);
+    }
+    
+    const stmt = db.prepare(query);
+    const { results: entries } = await stmt.bind(...params).all<JournalEntry>();
 
     // Aggregate connections with decay (relative to viewTime)
     const now = viewTime;
     const connectionMap = new Map<string, Connection>();
 
-    for (const entry of entries) {
+    for (const entry of entries || []) {
       const key = `${entry.agent_id}:${entry.target_type}:${entry.target_id}`;
       
       // Calculate decayed weight
@@ -84,7 +109,7 @@ connectionsRoutes.get('/', (c) => {
           source: entry.agent_id,
           target: entry.target_id,
           targetType: entry.target_type,
-          targetLabel: entry.target_label,
+          targetLabel: entry.target_label || null,
           weight: decayedWeight,
           lastInteraction: entry.timestamp,
           interactions: 1
@@ -94,12 +119,12 @@ connectionsRoutes.get('/', (c) => {
 
     // Filter out very weak connections
     const connections = [...connectionMap.values()]
-      .filter(c => c.weight >= 0.1)
+      .filter(conn => conn.weight >= 0.1)
       .sort((a, b) => b.weight - a.weight);
 
     // Build node list
-    const agents = db.prepare('SELECT id, name FROM agents').all() as any[];
-    const agentMap = new Map(agents.map(a => [a.id, a.name]));
+    const { results: agents } = await db.prepare('SELECT id, name FROM agents').all<Agent>();
+    const agentMap = new Map((agents || []).map(a => [a.id, a.name]));
     
     const nodeSet = new Set<string>();
     const nodes: any[] = [];
@@ -131,12 +156,12 @@ connectionsRoutes.get('/', (c) => {
 
     return c.json({
       nodes,
-      connections: connections.map(c => ({
-        source: c.source,
-        target: `${c.targetType}:${c.target}`,
-        weight: Math.round(c.weight * 100) / 100,
-        interactions: c.interactions,
-        lastInteraction: c.lastInteraction
+      connections: connections.map(conn => ({
+        source: conn.source,
+        target: `${conn.targetType}:${conn.target}`,
+        weight: Math.round(conn.weight * 100) / 100,
+        interactions: conn.interactions,
+        lastInteraction: conn.lastInteraction
       })),
       meta: {
         since,
