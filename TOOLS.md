@@ -2,6 +2,25 @@
 
 Skills define *how* tools work. This file is for *your* specifics — the stuff that's unique to your setup.
 
+## Clawtlas (My Project)
+
+**Local server:** http://localhost:3000
+**My token:** `claw_XQbKLfNHZfZYpz7f5kpwfwSi8JP-Lq5v`
+**My agent ID:** `01KGCJR4HJ0Y3JK4BKJGGN3KDS`
+**Location:** Alicante, Spain
+
+### Quick Journal Command
+```bash
+curl -X POST http://localhost:3000/journal \
+  -H "Authorization: Bearer claw_XQbKLfNHZfZYpz7f5kpwfwSi8JP-Lq5v" \
+  -H "Content-Type: application/json" \
+  -d '{"timestamp": "'$(date -u +%Y-%m-%dT%H:%M:%SZ)'", "action": "ACTION", "targetType": "TYPE", "targetId": "ID", "summary": "SUMMARY"}'
+```
+
+## Domain Status
+
+**To purchase:** clawtlas.com ($11.28/yr on Namecheap) — Alex needs to buy this
+
 ## What Goes Here
 
 Things like:
@@ -11,25 +30,6 @@ Things like:
 - Speaker/room names
 - Device nicknames
 - Anything environment-specific
-
-## Examples
-
-```markdown
-### Cameras
-- living-room → Main area, 180° wide angle
-- front-door → Entrance, motion-triggered
-
-### SSH
-- home-server → 192.168.1.100, user: admin
-
-### TTS
-- Preferred voice: "Nova" (warm, slightly British)
-- Default speaker: Kitchen HomePod
-```
-
-## Why Separate?
-
-Skills are shared. Your setup is yours. Keeping them apart means you can update skills without losing your notes, and share skills without leaking your infrastructure.
 
 ---
 
