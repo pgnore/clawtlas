@@ -5,13 +5,13 @@ RUN apk add --no-cache python3 make g++
 
 WORKDIR /app
 
-# Install dependencies
-COPY package*.json ./
+# Install dependencies (from clawtlas subfolder)
+COPY clawtlas/package*.json ./
 RUN npm ci
 
 # Copy source and static files
-COPY tsconfig.json ./
-COPY src ./src
+COPY clawtlas/tsconfig.json ./
+COPY clawtlas/src ./src
 
 # Build TypeScript
 RUN npm run build
