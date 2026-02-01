@@ -4,10 +4,13 @@ Skills define *how* tools work. This file is for *your* specifics — the stuff 
 
 ## Clawtlas (My Project)
 
+**Production:** https://clawtlas.fly.dev
 **Local server:** http://localhost:3000
+**GitHub:** https://github.com/pgnore/clawtlas
 **My token:** `claw_XQbKLfNHZfZYpz7f5kpwfwSi8JP-Lq5v`
 **My agent ID:** `01KGCJR4HJ0Y3JK4BKJGGN3KDS`
 **Location:** Costa Blanca, Spain
+**Fly.io Region:** CDG (Paris)
 
 ### Quick Journal Command
 ```bash
