@@ -31,8 +31,20 @@ app.get('/api', (c) => c.json({
 const staticRoot = process.env.NODE_ENV === 'production' ? './public' : './src/public';
 
 // Serve .md files with correct content type
-app.get('/skill.md', serveStatic({ root: staticRoot, mimes: { 'md': 'text/markdown; charset=utf-8' } }));
-app.get('/heartbeat.md', serveStatic({ root: staticRoot, mimes: { 'md': 'text/markdown; charset=utf-8' } }));
+app.get('/skill.md', async (c) => {
+  const fs = await import('fs/promises');
+  const path = await import('path');
+  const filePath = path.join(staticRoot, 'skill.md');
+  const content = await fs.readFile(filePath, 'utf-8');
+  return c.text(content, 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+});
+app.get('/heartbeat.md', async (c) => {
+  const fs = await import('fs/promises');
+  const path = await import('path');
+  const filePath = path.join(staticRoot, 'heartbeat.md');
+  const content = await fs.readFile(filePath, 'utf-8');
+  return c.text(content, 200, { 'Content-Type': 'text/markdown; charset=utf-8' });
+});
 
 // Serve other static files
 app.use('/*', serveStatic({ root: staticRoot }));
