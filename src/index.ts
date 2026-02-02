@@ -239,9 +239,10 @@ app.get('/skill.md', (c) => serveStaticFile(c, '/skill.md'));
 app.get('/skill.json', (c) => serveStaticFile(c, '/skill.json'));
 app.get('/heartbeat.md', (c) => serveStaticFile(c, '/heartbeat.md'));
 
-// Serve static assets (images, etc.)
+// Serve static assets (images, CSS, etc.)
 app.get('/logo.png', (c) => serveStaticFile(c, '/logo.png'));
 app.get('/header.png', (c) => serveStaticFile(c, '/header.png'));
+app.get('/css/*', (c) => serveStaticFile(c, c.req.path));
 
 // Export for Cloudflare Workers
 export default app;
