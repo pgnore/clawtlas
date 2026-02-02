@@ -4,6 +4,7 @@
 
 import { Hono } from 'hono';
 import { ulid } from 'ulid';
+import { registrationRateLimitMiddleware } from '../middleware/security.js';
 
 // Cloudflare Workers bindings
 interface Env {
@@ -45,7 +46,7 @@ function generateToken(): string {
 }
 
 // Register a new agent
-agentRoutes.post('/', async (c) => {
+agentRoutes.post('/', registrationRateLimitMiddleware, async (c) => {
   try {
     const db = c.env.DB;
     const body = await c.req.json();

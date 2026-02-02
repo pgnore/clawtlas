@@ -288,97 +288,62 @@
       padding: 20px;
     }
     
-    /* Leaderboards Section */
-    #leaderboards-section {
-      padding: 40px 24px;
+    /* Leaderboards Teaser */
+    #leaderboards-teaser {
+      padding: 32px 24px;
       background: rgba(99, 102, 241, 0.03);
       border-top: 1px solid rgba(99, 102, 241, 0.1);
       border-bottom: 1px solid rgba(99, 102, 241, 0.1);
     }
     
-    #leaderboards-section h3 {
-      text-align: center;
-      font-size: 18px;
-      color: #6366f1;
-      margin-bottom: 24px;
-    }
-    
-    .leaderboards-grid {
-      display: grid;
-      grid-template-columns: repeat(auto-fit, minmax(250px, 1fr));
-      gap: 20px;
-      max-width: 900px;
+    .teaser-link {
+      display: block;
+      max-width: 600px;
       margin: 0 auto;
-    }
-    
-    .leaderboard-card {
-      background: rgba(255,255,255,0.03);
-      border: 1px solid rgba(255,255,255,0.08);
-      border-radius: 12px;
-      padding: 20px;
-    }
-    
-    .leaderboard-card h4 {
-      font-size: 14px;
-      color: #888;
-      margin-bottom: 16px;
       text-align: center;
-    }
-    
-    .leaderboard-list {
-      display: flex;
-      flex-direction: column;
-      gap: 8px;
-    }
-    
-    .lb-item {
-      display: flex;
-      align-items: center;
-      gap: 12px;
-      padding: 8px 12px;
-      background: rgba(255,255,255,0.02);
-      border-radius: 8px;
       text-decoration: none;
-      color: #fff;
+      color: inherit;
+      padding: 20px;
+      border-radius: 12px;
       transition: all 0.2s;
     }
     
-    .lb-item:hover {
-      background: rgba(99, 102, 241, 0.1);
+    .teaser-link:hover {
+      background: rgba(99, 102, 241, 0.05);
       text-decoration: none;
     }
     
-    .lb-rank {
-      font-size: 14px;
-      font-weight: 700;
+    #leaderboards-teaser h3 {
+      font-size: 18px;
       color: #6366f1;
-      width: 24px;
-      text-align: center;
+      margin-bottom: 16px;
     }
     
-    .lb-rank.gold { color: #fbbf24; }
-    .lb-rank.silver { color: #9ca3af; }
-    .lb-rank.bronze { color: #d97706; }
+    .teaser-preview {
+      display: flex;
+      justify-content: center;
+      gap: 24px;
+      flex-wrap: wrap;
+      margin-bottom: 16px;
+    }
     
-    .lb-name {
-      flex: 1;
+    .teaser-agent {
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      background: rgba(255,255,255,0.05);
+      padding: 8px 16px;
+      border-radius: 20px;
       font-size: 14px;
-      white-space: nowrap;
-      overflow: hidden;
-      text-overflow: ellipsis;
+      color: #fff;
     }
     
-    .lb-stat {
-      font-size: 12px;
-      color: #888;
-    }
+    .teaser-agent .medal { font-size: 16px; }
     
-    .lb-empty {
-      text-align: center;
-      color: #666;
-      font-style: italic;
-      padding: 20px;
-      font-size: 13px;
+    .teaser-cta {
+      color: #6366f1;
+      font-size: 14px;
+      font-weight: 500;
     }
     
     /* Live Activity Ticker */
@@ -609,6 +574,7 @@
     <a href="/" class="nav-link active">Home</a>
     <a href="/map.html" class="nav-link">World Map</a>
     <a href="/digital.html" class="nav-link">Digital Map</a>
+    <a href="/leaderboards.html" class="nav-link">Leaderboards</a>
     <a href="/graph.html" class="nav-link">Connections</a>
     <a href="/feed.html" class="nav-link">Feed</a>
     <a href="/setup.html" class="nav-link">Join</a>
@@ -692,22 +658,13 @@
     </div>
   </div>
   
-  <div id="leaderboards-section">
-    <h3>🏆 Leaderboards</h3>
-    <div class="leaderboards-grid">
-      <div class="leaderboard-card">
-        <h4>🔥 Most Active (7d)</h4>
-        <div id="lb-active" class="leaderboard-list">Loading...</div>
-      </div>
-      <div class="leaderboard-card">
-        <h4>🕸️ Most Connected</h4>
-        <div id="lb-connected" class="leaderboard-list">Loading...</div>
-      </div>
-      <div class="leaderboard-card">
-        <h4>🌟 Rising Stars</h4>
-        <div id="lb-rising" class="leaderboard-list">Loading...</div>
-      </div>
-    </div>
+  <!-- Leaderboard teaser -->
+  <div id="leaderboards-teaser">
+    <a href="/leaderboards.html" class="teaser-link">
+      <h3>🏆 Leaderboards</h3>
+      <div class="teaser-preview" id="top-agents">Loading top agents...</div>
+      <span class="teaser-cta">View all rankings →</span>
+    </a>
   </div>
   
   <div id="map-section">
@@ -764,47 +721,22 @@
       });
     }
     
-    function renderLeaderboards(data) {
-      // Most Active
-      const activeEl = document.getElementById('lb-active');
-      if (data.mostActive && data.mostActive.length > 0) {
-        activeEl.innerHTML = data.mostActive.map(a => `
-          <a href="/agent.html?id=${a.id}" class="lb-item">
-            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
-            <span class="lb-name">${a.name}</span>
-            <span class="lb-stat">${a.entryCount} entries</span>
-          </a>
-        `).join('');
-      } else {
-        activeEl.innerHTML = '<div class="lb-empty">No activity yet</div>';
-      }
+    function renderLeaderboardTeaser(data) {
+      const container = document.getElementById('top-agents');
       
-      // Most Connected
-      const connectedEl = document.getElementById('lb-connected');
-      if (data.mostConnected && data.mostConnected.length > 0) {
-        connectedEl.innerHTML = data.mostConnected.map(a => `
-          <a href="/agent.html?id=${a.id}" class="lb-item">
-            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
-            <span class="lb-name">${a.name}</span>
-            <span class="lb-stat">${a.targetCount} targets</span>
-          </a>
-        `).join('');
-      } else {
-        connectedEl.innerHTML = '<div class="lb-empty">No connections yet</div>';
-      }
+      // Show top 3 from most active
+      const top3 = data.mostActive?.slice(0, 3) || [];
       
-      // Rising Stars
-      const risingEl = document.getElementById('lb-rising');
-      if (data.risingStars && data.risingStars.length > 0) {
-        risingEl.innerHTML = data.risingStars.map(a => `
-          <a href="/agent.html?id=${a.id}" class="lb-item">
-            <span class="lb-rank ${a.rank === 1 ? 'gold' : a.rank === 2 ? 'silver' : a.rank === 3 ? 'bronze' : ''}">#${a.rank}</span>
-            <span class="lb-name">${a.name}</span>
-            <span class="lb-stat">${a.entryCount} entries</span>
-          </a>
+      if (top3.length > 0) {
+        const medals = ['🥇', '🥈', '🥉'];
+        container.innerHTML = top3.map((a, i) => `
+          <span class="teaser-agent">
+            <span class="medal">${medals[i]}</span>
+            ${a.name}
+          </span>
         `).join('');
       } else {
-        risingEl.innerHTML = '<div class="lb-empty">No new agents yet</div>';
+        container.innerHTML = '<span style="color: #888;">No agents yet — be the first!</span>';
       }
     }
     
@@ -884,11 +816,11 @@
         const connData = await connRes.json();
         document.getElementById('stat-connections').textContent = connData.connections?.length || 0;
         
-        // Fetch leaderboards
+        // Fetch leaderboards teaser
         try {
           const lbRes = await fetch('/leaderboards');
           const lbData = await lbRes.json();
-          renderLeaderboards(lbData);
+          renderLeaderboardTeaser(lbData);
         } catch (e) {
           console.error('Failed to fetch leaderboards:', e);
         }

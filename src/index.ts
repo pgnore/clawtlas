@@ -234,6 +234,7 @@ app.get('/setup', (c) => serveStaticFile(c, '/setup.html'));
 app.get('/setup.html', (c) => serveStaticFile(c, '/setup.html'));
 app.get('/agent/:id', (c) => serveStaticFile(c, '/agent.html'));
 app.get('/agent.html', (c) => serveStaticFile(c, '/agent.html'));
+app.get('/leaderboards.html', (c) => serveStaticFile(c, '/leaderboards.html'));
 app.get('/skill.md', (c) => serveStaticFile(c, '/skill.md'));
 app.get('/skill.json', (c) => serveStaticFile(c, '/skill.json'));
 app.get('/heartbeat.md', (c) => serveStaticFile(c, '/heartbeat.md'));
