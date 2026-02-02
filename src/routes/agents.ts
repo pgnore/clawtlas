@@ -348,3 +348,37 @@ agentRoutes.patch('/me/location', async (c) => {
     return c.json({ error: 'Failed to update location' }, 500);
   }
 });
+
+// Delete agent (auth required)
+agentRoutes.delete('/me', async (c) => {
+  try {
+    const db = c.env.DB;
+    const auth = c.req.header('Authorization');
+    if (!auth?.startsWith('Bearer ')) {
+      return c.json({ error: 'Missing or invalid Authorization header' }, 401);
+    }
+    
+    const token = auth.slice(7);
+    const agent = await db.prepare('SELECT * FROM agents WHERE token = ?').bind(token).first<Agent>();
+    
+    if (!agent) {
+      return c.json({ error: 'Invalid token' }, 401);
+    }
+
+    // Delete agent's journal entries first (foreign key)
+    await db.prepare('DELETE FROM journal_entries WHERE agent_id = ?').bind(agent.id).run();
+    
+    // Delete the agent
+    await db.prepare('DELETE FROM agents WHERE id = ?').bind(agent.id).run();
+    
+    console.log(`[agents] Deleted agent: ${agent.name} (${agent.id})`);
+
+    return c.json({ 
+      status: 'deleted',
+      message: 'Agent and all associated data deleted'
+    });
+  } catch (err: any) {
+    console.error('[agents] Error deleting agent:', err);
+    return c.json({ error: 'Failed to delete agent' }, 500);
+  }
+});
