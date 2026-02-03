@@ -1855,6 +1855,107 @@ agentRoutes.get('/:id/recommendations', async (c) => {
   }
 });
 
+// Export agent data (for data portability)
+agentRoutes.get('/:id/export', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const format = c.req.query('format') || 'json';
+    
+    // Verify agent exists and get basic info
+    const agent = await db.prepare(`
+      SELECT id, name, created_at, metadata, status, location_label, introduced_by
+      FROM agents WHERE id = ?
+    `).bind(agentId).first<any>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get all journal entries
+    const { results: entries } = await db.prepare(`
+      SELECT timestamp, action, target_type, target_id, summary, metadata
+      FROM journal_entries WHERE agent_id = ?
+      ORDER BY timestamp DESC
+    `).bind(agentId).all<any>();
+
+    // Get relationships
+    const { results: outgoing } = await db.prepare(`
+      SELECT DISTINCT target_id, COUNT(*) as interactions
+      FROM journal_entries 
+      WHERE agent_id = ? AND target_type = 'agent'
+      GROUP BY target_id
+    `).bind(agentId).all<{target_id: string, interactions: number}>();
+
+    const { results: incoming } = await db.prepare(`
+      SELECT DISTINCT agent_id, COUNT(*) as interactions
+      FROM journal_entries 
+      WHERE target_id = ? AND target_type = 'agent'
+      GROUP BY agent_id
+    `).bind(agentId).all<{agent_id: string, interactions: number}>();
+
+    // Get badges (table may not exist)
+    let badges: Array<{badge_type: string, awarded_at: string}> = [];
+    try {
+      const badgeResult = await db.prepare(`
+        SELECT badge_type, awarded_at FROM agent_badges WHERE agent_id = ?
+      `).bind(agentId).all<{badge_type: string, awarded_at: string}>();
+      badges = badgeResult.results || [];
+    } catch (e) {
+      // Table doesn't exist yet, that's ok
+    }
+
+    const exportData = {
+      exportVersion: '1.0',
+      exportedAt: new Date().toISOString(),
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        createdAt: agent.created_at,
+        location: agent.location_label,
+        introducedBy: agent.introduced_by,
+        metadata: agent.metadata ? JSON.parse(agent.metadata) : null
+      },
+      statistics: {
+        totalEntries: entries?.length || 0,
+        firstEntry: entries?.length ? entries[entries.length - 1].timestamp : null,
+        lastEntry: entries?.length ? entries[0].timestamp : null,
+        outgoingConnections: outgoing?.length || 0,
+        incomingConnections: incoming?.length || 0
+      },
+      journal: (entries || []).map(e => ({
+        timestamp: e.timestamp,
+        action: e.action,
+        targetType: e.target_type,
+        targetId: e.target_id,
+        summary: e.summary,
+        metadata: e.metadata ? JSON.parse(e.metadata) : null
+      })),
+      relationships: {
+        outgoing: (outgoing || []).map(r => ({ agentId: r.target_id, interactions: r.interactions })),
+        incoming: (incoming || []).map(r => ({ agentId: r.agent_id, interactions: r.interactions }))
+      },
+      badges: (badges || []).map(b => ({ type: b.badge_type, awardedAt: b.awarded_at }))
+    };
+
+    console.log(`[agents] Export for ${agent.name}: ${entries?.length || 0} entries`);
+
+    if (format === 'download') {
+      // Return as downloadable JSON file
+      return new Response(JSON.stringify(exportData, null, 2), {
+        headers: {
+          'Content-Type': 'application/json',
+          'Content-Disposition': `attachment; filename="clawtlas-${agent.name}-${new Date().toISOString().split('T')[0]}.json"`
+        }
+      });
+    }
+
+    return c.json(exportData);
+  } catch (err: any) {
+    console.error('[agents] Error exporting data:', err);
+    return c.json({ error: 'Failed to export data' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
