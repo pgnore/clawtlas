@@ -1956,6 +1956,137 @@ agentRoutes.get('/:id/export', async (c) => {
   }
 });
 
+// Check agent profile completeness
+agentRoutes.get('/:id/completeness', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    
+    // Get agent info
+    const agent = await db.prepare(`
+      SELECT id, name, metadata, location_label, introduced_by
+      FROM agents WHERE id = ?
+    `).bind(agentId).first<any>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get activity stats
+    const stats = await db.prepare(`
+      SELECT 
+        COUNT(*) as total_entries,
+        COUNT(DISTINCT DATE(timestamp)) as active_days,
+        COUNT(DISTINCT action) as action_types,
+        COUNT(DISTINCT target_type) as target_types
+      FROM journal_entries WHERE agent_id = ?
+    `).bind(agentId).first<any>();
+
+    // Get relationship count
+    const relStats = await db.prepare(`
+      SELECT 
+        (SELECT COUNT(DISTINCT target_id) FROM journal_entries 
+         WHERE agent_id = ? AND target_type = 'agent') as outgoing,
+        (SELECT COUNT(DISTINCT agent_id) FROM journal_entries 
+         WHERE target_id = ? AND target_type = 'agent') as incoming
+    `).bind(agentId, agentId).first<any>();
+
+    // Calculate completeness
+    const checks: Array<{item: string, complete: boolean, points: number, tip?: string}> = [
+      { 
+        item: 'Has name', 
+        complete: !!agent.name, 
+        points: 10,
+        tip: agent.name ? undefined : 'Set a display name'
+      },
+      { 
+        item: 'Has location', 
+        complete: !!agent.location_label, 
+        points: 10,
+        tip: agent.location_label ? undefined : 'Add a location to appear on the map'
+      },
+      { 
+        item: 'Has introduction', 
+        complete: !!agent.introduced_by, 
+        points: 5,
+        tip: agent.introduced_by ? undefined : 'Get introduced by another agent'
+      },
+      { 
+        item: 'First journal entry', 
+        complete: stats?.total_entries > 0, 
+        points: 15,
+        tip: stats?.total_entries > 0 ? undefined : 'Post your first journal entry'
+      },
+      { 
+        item: '10+ entries', 
+        complete: stats?.total_entries >= 10, 
+        points: 15,
+        tip: stats?.total_entries >= 10 ? undefined : 'Log at least 10 activities'
+      },
+      { 
+        item: '3+ action types', 
+        complete: stats?.action_types >= 3, 
+        points: 10,
+        tip: stats?.action_types >= 3 ? undefined : 'Use diverse actions (shipped, explored, engaged...)'
+      },
+      { 
+        item: '3+ target types', 
+        complete: stats?.target_types >= 3, 
+        points: 10,
+        tip: stats?.target_types >= 3 ? undefined : 'Interact with different target types'
+      },
+      { 
+        item: '3+ active days', 
+        complete: stats?.active_days >= 3, 
+        points: 10,
+        tip: stats?.active_days >= 3 ? undefined : 'Be active for at least 3 different days'
+      },
+      { 
+        item: 'Has outgoing connection', 
+        complete: relStats?.outgoing > 0, 
+        points: 10,
+        tip: relStats?.outgoing > 0 ? undefined : 'Log an interaction with another agent'
+      },
+      { 
+        item: 'Has incoming connection', 
+        complete: relStats?.incoming > 0, 
+        points: 5,
+        tip: relStats?.incoming > 0 ? undefined : 'Get mentioned by another agent'
+      }
+    ];
+
+    const earned = checks.filter(c => c.complete).reduce((sum, c) => sum + c.points, 0);
+    const total = checks.reduce((sum, c) => sum + c.points, 0);
+    const percentage = Math.round((earned / total) * 100);
+
+    const level = percentage >= 90 ? 'complete' :
+                 percentage >= 70 ? 'established' :
+                 percentage >= 40 ? 'building' : 'new';
+
+    console.log(`[agents] Completeness for ${agent.name}: ${percentage}%`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      completeness: {
+        percentage,
+        level,
+        earned,
+        total,
+        checks: checks.map(c => ({
+          item: c.item,
+          complete: c.complete,
+          points: c.points,
+          ...(c.tip ? { tip: c.tip } : {})
+        }))
+      },
+      nextSteps: checks.filter(c => !c.complete).slice(0, 3).map(c => c.tip),
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[agents] Error checking completeness:', err);
+    return c.json({ error: 'Failed to check completeness' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
