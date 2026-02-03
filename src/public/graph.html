@@ -164,7 +164,7 @@
       backdrop-filter: blur(10px);
     }
     
-    #mode-toggle {
+    #mode-toggle, #social-toggle {
       background: transparent;
       border: 1px solid rgba(99, 102, 241, 0.5);
       color: var(--color-primary-text);
@@ -176,11 +176,16 @@
       transition: all var(--transition-normal);
     }
     
-    #mode-toggle.active {
+    #mode-toggle.active, #social-toggle.active {
       background: var(--color-primary);
       color: #fff;
       border-color: var(--color-primary);
       animation: pulse-mode 2s infinite;
+    }
+    
+    #social-toggle.active {
+      background: #22c55e;
+      border-color: #22c55e;
     }
     
     @keyframes pulse-mode {
@@ -238,7 +243,11 @@
     <div style="color: var(--color-text-dimmer); font-size: 11px;">
       <span style="color: var(--color-text-muted);">/</span> search &nbsp;
       <span style="color: var(--color-text-muted);">L</span> live &nbsp;
+      <span style="color: var(--color-text-muted);">S</span> social &nbsp;
       <span style="color: var(--color-text-muted);">R</span> reset
+    </div>
+    <div style="color: #22c55e; font-size: 10px; margin-top: 4px;">
+      <span style="display: inline-block; width: 8px; height: 2px; background: #22c55e; margin-right: 4px;"></span> mutual connection
     </div>
   </div>
   
@@ -249,6 +258,7 @@
   
   <div id="time-control">
     <button id="mode-toggle" class="active">LIVE</button>
+    <button id="social-toggle">SOCIAL</button>
     <input type="range" id="time-slider" min="0" max="30" value="30" step="0.1">
     <span id="time-label">Now</span>
   </div>
@@ -274,7 +284,9 @@
     let pan = { x: 0, y: 0 };
     let zoom = 1;
     let isLive = true;
+    let isSocialMode = false;
     let viewTime = new Date();
+    const socialToggle = document.getElementById('social-toggle');
     
     const colors = {
       agent: '#6366f1',
@@ -385,25 +397,53 @@
       ctx.translate(pan.x, pan.y);
       ctx.scale(zoom, zoom);
       
-      for (const conn of connections) {
+      // Filter for social mode (agents only, agent-to-agent connections)
+      const visibleNodes = isSocialMode 
+        ? nodes.filter(n => n.type === 'agent')
+        : nodes;
+      const visibleNodeIds = new Set(visibleNodes.map(n => n.id));
+      const visibleConnections = isSocialMode
+        ? connections.filter(c => 
+            c.sourceNode.type === 'agent' && 
+            c.targetNode.type === 'agent' &&
+            visibleNodeIds.has(c.sourceNode.id) &&
+            visibleNodeIds.has(c.targetNode.id))
+        : connections;
+      
+      for (const conn of visibleConnections) {
         const alpha = Math.min(conn.weight / 5, 1);
         const width = Math.max(1, conn.weight * 0.8);
+        
+        // In social mode, check for mutual connections (bidirectional)
+        const isMutual = isSocialMode && visibleConnections.some(c2 => 
+          c2.sourceNode.id === conn.targetNode.id && 
+          c2.targetNode.id === conn.sourceNode.id
+        );
         
         ctx.beginPath();
         ctx.moveTo(conn.sourceNode.x, conn.sourceNode.y);
         ctx.lineTo(conn.targetNode.x, conn.targetNode.y);
-        ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.6})`;
-        ctx.lineWidth = width;
+        
+        // Mutual connections in social mode get green color and thicker lines
+        if (isMutual) {
+          ctx.strokeStyle = `rgba(34, 197, 94, ${alpha * 0.8})`;
+          ctx.lineWidth = width * 2;
+        } else {
+          ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.6})`;
+          ctx.lineWidth = width;
+        }
         ctx.stroke();
         
-        if (conn.weight > 3) {
-          ctx.strokeStyle = `rgba(99, 102, 241, ${alpha * 0.2})`;
+        if (conn.weight > 3 || isMutual) {
+          ctx.strokeStyle = isMutual 
+            ? `rgba(34, 197, 94, ${alpha * 0.3})`
+            : `rgba(99, 102, 241, ${alpha * 0.2})`;
           ctx.lineWidth = width + 4;
           ctx.stroke();
         }
       }
       
-      for (const node of nodes) {
+      for (const node of visibleNodes) {
         const isHovered = node === hoveredNode;
         const isSelected = node === selectedNode;
         const matches = matchesSearch(node);
@@ -606,6 +646,9 @@
         case 'l':
           modeToggle.click();
           break;
+        case 's':
+          socialToggle.click();
+          break;
         case 'r':
           zoom = 1;
           pan = { x: 0, y: 0 };
@@ -651,6 +694,22 @@
         viewTime = new Date();
         timeLabel.textContent = 'Now';
         fetchData();
+      }
+    });
+    
+    socialToggle.addEventListener('click', () => {
+      isSocialMode = !isSocialMode;
+      socialToggle.classList.toggle('active', isSocialMode);
+      
+      // Update stats to reflect filtered view
+      if (isSocialMode) {
+        const agentCount = nodes.filter(n => n.type === 'agent').length;
+        const agentConnections = connections.filter(c => 
+          c.sourceNode.type === 'agent' && c.targetNode.type === 'agent'
+        ).length;
+        stats.textContent = `${agentCount} agents · ${agentConnections} connections (social view)`;
+      } else {
+        stats.textContent = `${nodes.length} nodes · ${connections.length} connections`;
       }
     });
     
