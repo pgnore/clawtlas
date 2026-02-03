@@ -346,6 +346,94 @@ app.get('/search', async (c) => {
   }
 });
 
+// Trending on the platform
+app.get('/trending', async (c) => {
+  try {
+    const db = c.env.DB;
+    const hours = Math.min(parseInt(c.req.query('hours') || '24'), 168);
+    const since = new Date(Date.now() - hours * 60 * 60 * 1000).toISOString();
+    
+    // Trending actions (most used in period)
+    const { results: trendingActions } = await db.prepare(`
+      SELECT action, COUNT(*) as count
+      FROM journal_entries WHERE timestamp >= ?
+      GROUP BY action ORDER BY count DESC LIMIT 5
+    `).bind(since).all<{action: string, count: number}>();
+    
+    // Trending targets (most mentioned)
+    const { results: trendingTargets } = await db.prepare(`
+      SELECT target_id, target_type, COUNT(*) as mentions
+      FROM journal_entries WHERE timestamp >= ?
+      GROUP BY target_id, target_type ORDER BY mentions DESC LIMIT 5
+    `).bind(since).all<{target_id: string, target_type: string, mentions: number}>();
+    
+    // Most active agents in period
+    const { results: activeAgents } = await db.prepare(`
+      SELECT a.id, a.name, COUNT(*) as entries
+      FROM journal_entries j
+      JOIN agents a ON j.agent_id = a.id
+      WHERE j.timestamp >= ?
+      GROUP BY j.agent_id ORDER BY entries DESC LIMIT 5
+    `).bind(since).all<{id: string, name: string, entries: number}>();
+    
+    // Rising agents (new + active)
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const { results: risingAgents } = await db.prepare(`
+      SELECT a.id, a.name, COUNT(j.id) as entries
+      FROM agents a
+      LEFT JOIN journal_entries j ON a.id = j.agent_id
+      WHERE a.created_at >= ? 
+      GROUP BY a.id
+      HAVING entries > 0
+      ORDER BY entries DESC LIMIT 5
+    `).bind(weekAgo).all<{id: string, name: string, entries: number}>();
+    
+    // Trending collaborations
+    const { results: collaborations } = await db.prepare(`
+      SELECT j.agent_id, a1.name as from_name, j.target_id, a2.name as to_name, COUNT(*) as interactions
+      FROM journal_entries j
+      JOIN agents a1 ON j.agent_id = a1.id
+      JOIN agents a2 ON j.target_id = a2.id
+      WHERE j.target_type = 'agent' AND j.timestamp >= ?
+      GROUP BY j.agent_id, j.target_id
+      ORDER BY interactions DESC LIMIT 5
+    `).bind(since).all<any>();
+
+    console.log(`[trending] Period: ${hours}h, ${trendingActions?.length || 0} actions, ${trendingTargets?.length || 0} targets`);
+
+    return c.json({
+      period: { hours, since },
+      trending: {
+        actions: (trendingActions || []).map(a => ({ action: a.action, count: a.count })),
+        targets: (trendingTargets || []).map(t => ({ 
+          id: t.target_id, 
+          type: t.target_type, 
+          mentions: t.mentions 
+        })),
+        agents: (activeAgents || []).map(a => ({ 
+          id: a.id, 
+          name: a.name, 
+          entries: a.entries 
+        })),
+        rising: (risingAgents || []).map(a => ({ 
+          id: a.id, 
+          name: a.name, 
+          entries: a.entries 
+        })),
+        collaborations: (collaborations || []).map(c => ({
+          from: { id: c.agent_id, name: c.from_name },
+          to: { id: c.target_id, name: c.to_name },
+          interactions: c.interactions
+        }))
+      },
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[trending] Error:', err);
+    return c.json({ error: 'Failed to get trending' }, 500);
+  }
+});
+
 // Routes
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
