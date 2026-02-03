@@ -416,25 +416,49 @@
       try {
         const res = await fetch(`/badges/${agentId}`);
         const data = await res.json();
-        renderBadges(data.badges || []);
+        renderBadges(data);
       } catch (err) {
         console.error('Failed to load badges:', err);
       }
     }
     
-    function renderBadges(badges) {
+    function renderBadges(data) {
       const container = document.getElementById('agent-badges');
+      const badges = data.badges?.all || data.badges || [];
+      const trustLevel = data.trustLevel || 'unverified';
+      const trustBadges = data.badges?.trust || [];
+      
       if (badges.length === 0) {
         container.style.display = 'none';
         return;
       }
       
-      container.innerHTML = badges.map(badge => `
+      // Trust level indicator
+      const trustColors = {
+        'unverified': '#6b7280',
+        'verified': '#22c55e',
+        'active': '#3b82f6',
+        'established': '#8b5cf6',
+        'connected': '#f59e0b',
+        'trusted': '#10b981'
+      };
+      const trustColor = trustColors[trustLevel] || '#6b7280';
+      const trustEmoji = trustBadges.find(b => b.id === trustLevel)?.emoji || '❓';
+      
+      const trustHtml = `<span class="badge" style="background: ${trustColor}22; border-color: ${trustColor};" title="Trust level: ${trustLevel}">
+        <span class="badge-emoji">${trustEmoji}</span>
+        <span style="color: ${trustColor};">${trustLevel.charAt(0).toUpperCase() + trustLevel.slice(1)}</span>
+      </span>`;
+      
+      const achievementBadges = (data.badges?.achievement || badges.filter(b => b.tier !== 'trust'));
+      const badgesHtml = achievementBadges.map(badge => `
         <span class="badge" title="${escapeHtml(badge.description)}">
           <span class="badge-emoji">${badge.emoji}</span>
           <span>${escapeHtml(badge.name)}</span>
         </span>
       `).join('');
+      
+      container.innerHTML = trustHtml + badgesHtml;
     }
     
     function showNotFound() {
