@@ -2087,6 +2087,123 @@ agentRoutes.get('/:id/completeness', async (c) => {
   }
 });
 
+// Generate embeddable agent card (SVG)
+agentRoutes.get('/:id/card.svg', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const style = c.req.query('style') || 'dark';
+    
+    // Get agent info
+    const agent = await db.prepare(`
+      SELECT id, name, created_at, location_label
+      FROM agents WHERE id = ?
+    `).bind(agentId).first<any>();
+    if (!agent) {
+      return new Response('<svg><text>Agent not found</text></svg>', { 
+        headers: { 'Content-Type': 'image/svg+xml' },
+        status: 404 
+      });
+    }
+
+    // Get stats
+    const stats = await db.prepare(`
+      SELECT COUNT(*) as entries, COUNT(DISTINCT target_id) as targets
+      FROM journal_entries WHERE agent_id = ?
+    `).bind(agentId).first<{entries: number, targets: number}>();
+
+    // Get relationship count
+    const rels = await db.prepare(`
+      SELECT COUNT(DISTINCT target_id) as connections
+      FROM journal_entries WHERE agent_id = ? AND target_type = 'agent'
+    `).bind(agentId).first<{connections: number}>();
+
+    // Calculate days active
+    const daysActive = Math.floor((Date.now() - new Date(agent.created_at).getTime()) / (1000 * 60 * 60 * 24)) + 1;
+
+    // Determine trust level
+    let trustLevel = 'New';
+    let trustColor = '#6b7280';
+    if (stats?.entries && stats.entries > 0) {
+      trustLevel = 'Verified';
+      trustColor = '#10b981';
+    }
+    if (daysActive >= 30) {
+      trustLevel = 'Established';
+      trustColor = '#3b82f6';
+    }
+    if ((rels?.connections || 0) >= 3) {
+      trustLevel = 'Connected';
+      trustColor = '#8b5cf6';
+    }
+
+    const bgColor = style === 'light' ? '#ffffff' : '#0a0a0f';
+    const textColor = style === 'light' ? '#1f2937' : '#ffffff';
+    const mutedColor = style === 'light' ? '#6b7280' : '#9ca3af';
+    const borderColor = style === 'light' ? '#e5e7eb' : '#374151';
+
+    const svg = `<svg width="400" height="150" xmlns="http://www.w3.org/2000/svg">
+      <defs>
+        <linearGradient id="grad" x1="0%" y1="0%" x2="100%" y2="100%">
+          <stop offset="0%" style="stop-color:${bgColor};stop-opacity:1" />
+          <stop offset="100%" style="stop-color:${style === 'light' ? '#f3f4f6' : '#1f2937'};stop-opacity:1" />
+        </linearGradient>
+      </defs>
+      <rect width="400" height="150" rx="12" fill="url(#grad)" stroke="${borderColor}" stroke-width="1"/>
+      
+      <!-- Agent name -->
+      <text x="20" y="35" font-family="-apple-system, BlinkMacSystemFont, sans-serif" font-size="20" font-weight="600" fill="${textColor}">${escapeXml(agent.name)}</text>
+      
+      <!-- Trust badge -->
+      <rect x="20" y="45" width="${trustLevel.length * 8 + 16}" height="20" rx="4" fill="${trustColor}20"/>
+      <text x="28" y="59" font-family="-apple-system, sans-serif" font-size="11" fill="${trustColor}">${trustLevel}</text>
+      
+      <!-- Location if available -->
+      ${agent.location_label ? `<text x="20" y="85" font-family="-apple-system, sans-serif" font-size="12" fill="${mutedColor}">📍 ${escapeXml(agent.location_label)}</text>` : ''}
+      
+      <!-- Stats -->
+      <text x="20" y="115" font-family="-apple-system, sans-serif" font-size="12" fill="${mutedColor}">
+        <tspan font-weight="600" fill="${textColor}">${stats?.entries || 0}</tspan> entries · 
+        <tspan font-weight="600" fill="${textColor}">${stats?.targets || 0}</tspan> targets · 
+        <tspan font-weight="600" fill="${textColor}">${rels?.connections || 0}</tspan> connections
+      </text>
+      
+      <!-- Days active -->
+      <text x="20" y="135" font-family="-apple-system, sans-serif" font-size="11" fill="${mutedColor}">${daysActive} day${daysActive !== 1 ? 's' : ''} on Clawtlas</text>
+      
+      <!-- Clawtlas logo -->
+      <text x="340" y="135" font-family="-apple-system, sans-serif" font-size="10" fill="${mutedColor}">clawtlas.com</text>
+    </svg>`;
+
+    return new Response(svg, {
+      headers: {
+        'Content-Type': 'image/svg+xml',
+        'Cache-Control': 'public, max-age=3600'
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error generating card:', err);
+    return new Response('<svg><text>Error</text></svg>', { 
+      headers: { 'Content-Type': 'image/svg+xml' },
+      status: 500 
+    });
+  }
+});
+
+// Helper to escape XML
+function escapeXml(text: string): string {
+  return text.replace(/[<>&'"]/g, c => {
+    switch (c) {
+      case '<': return '&lt;';
+      case '>': return '&gt;';
+      case '&': return '&amp;';
+      case "'": return '&apos;';
+      case '"': return '&quot;';
+      default: return c;
+    }
+  });
+}
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
