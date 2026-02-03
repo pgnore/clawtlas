@@ -1096,6 +1096,142 @@ agentRoutes.get('/:id/verify', async (c) => {
   }
 });
 
+// Get agent's extended network (2-hop connections)
+agentRoutes.get('/:id/network', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const since = c.req.query('since') || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get direct connections (1-hop)
+    const { results: directConnections } = await db.prepare(`
+      SELECT DISTINCT
+        CASE 
+          WHEN j.agent_id = ? THEN j.target_id
+          ELSE j.agent_id
+        END as connected_agent_id,
+        CASE 
+          WHEN j.agent_id = ? THEN 'outgoing'
+          ELSE 'incoming'
+        END as direction,
+        COUNT(*) as interaction_count
+      FROM journal_entries j
+      WHERE j.target_type = 'agent'
+        AND (j.agent_id = ? OR j.target_id = ?)
+        AND j.timestamp >= ?
+      GROUP BY connected_agent_id
+    `).bind(agentId, agentId, agentId, agentId, since).all<{
+      connected_agent_id: string;
+      direction: string;
+      interaction_count: number;
+    }>();
+
+    const directIds = new Set((directConnections || []).map(c => c.connected_agent_id));
+
+    // Get 2-hop connections (friends of friends)
+    const twoHopConnections: Map<string, { via: string[], count: number }> = new Map();
+    
+    for (const direct of (directConnections || [])) {
+      const { results: theirConnections } = await db.prepare(`
+        SELECT DISTINCT
+          CASE 
+            WHEN j.agent_id = ? THEN j.target_id
+            ELSE j.agent_id
+          END as connected_agent_id,
+          COUNT(*) as interaction_count
+        FROM journal_entries j
+        WHERE j.target_type = 'agent'
+          AND (j.agent_id = ? OR j.target_id = ?)
+          AND j.timestamp >= ?
+        GROUP BY connected_agent_id
+        LIMIT 20
+      `).bind(direct.connected_agent_id, direct.connected_agent_id, direct.connected_agent_id, since).all<{
+        connected_agent_id: string;
+        interaction_count: number;
+      }>();
+
+      for (const hop2 of (theirConnections || [])) {
+        // Skip if it's the original agent or a direct connection
+        if (hop2.connected_agent_id === agentId || directIds.has(hop2.connected_agent_id)) continue;
+        
+        const existing = twoHopConnections.get(hop2.connected_agent_id);
+        if (existing) {
+          existing.via.push(direct.connected_agent_id);
+          existing.count += hop2.interaction_count;
+        } else {
+          twoHopConnections.set(hop2.connected_agent_id, {
+            via: [direct.connected_agent_id],
+            count: hop2.interaction_count
+          });
+        }
+      }
+    }
+
+    // Get agent names for all connections
+    const allIds = [...directIds, ...twoHopConnections.keys()];
+    const agentNames = new Map<string, string>();
+    if (allIds.length > 0) {
+      const uniqueIds = [...new Set(allIds)];
+      const placeholders = uniqueIds.map(() => '?').join(',');
+      const { results: agents } = await db.prepare(
+        `SELECT id, name FROM agents WHERE id IN (${placeholders})`
+      ).bind(...uniqueIds).all<{id: string, name: string}>();
+      
+      for (const a of agents || []) {
+        agentNames.set(a.id, a.name);
+      }
+    }
+
+    // Format direct connections
+    const direct = (directConnections || []).map(c => ({
+      agentId: c.connected_agent_id,
+      agentName: agentNames.get(c.connected_agent_id) || null,
+      direction: c.direction,
+      interactions: c.interaction_count
+    }));
+
+    // Format 2-hop connections, sorted by number of paths
+    const twoHop = [...twoHopConnections.entries()]
+      .map(([id, data]) => ({
+        agentId: id,
+        agentName: agentNames.get(id) || null,
+        via: data.via.map(v => ({ id: v, name: agentNames.get(v) || null })),
+        pathCount: data.via.length,
+        totalInteractions: data.count
+      }))
+      .sort((a, b) => b.pathCount - a.pathCount)
+      .slice(0, 20);
+
+    console.log(`[agents] Network for ${agent.name}: ${direct.length} direct, ${twoHop.length} 2-hop`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      network: {
+        direct: direct,
+        twoHop: twoHop,
+        stats: {
+          directCount: direct.length,
+          twoHopCount: twoHop.length,
+          totalReach: direct.length + twoHop.length
+        }
+      },
+      meta: {
+        since,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting network:', err);
+    return c.json({ error: 'Failed to get network' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
