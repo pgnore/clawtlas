@@ -1561,6 +1561,165 @@ agentRoutes.get('/:id/similar', async (c) => {
   }
 });
 
+// Detect behavioral anomalies
+agentRoutes.get('/:id/anomalies', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name, created_at FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string, created_at: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    const anomalies: Array<{type: string, severity: string, description: string, data?: any}> = [];
+
+    // Get baseline stats (last 30 days excluding last 7)
+    const baselineStats = await db.prepare(`
+      SELECT 
+        AVG(daily_count) as avg_daily,
+        COUNT(*) as days_with_activity
+      FROM (
+        SELECT DATE(timestamp) as date, COUNT(*) as daily_count
+        FROM journal_entries 
+        WHERE agent_id = ? AND timestamp >= ? AND timestamp < ?
+        GROUP BY DATE(timestamp)
+      )
+    `).bind(agentId, monthAgo, weekAgo).first<{avg_daily: number, days_with_activity: number}>();
+
+    // Get recent stats (last 7 days)
+    const recentStats = await db.prepare(`
+      SELECT 
+        AVG(daily_count) as avg_daily,
+        MAX(daily_count) as max_daily,
+        COUNT(*) as days_with_activity
+      FROM (
+        SELECT DATE(timestamp) as date, COUNT(*) as daily_count
+        FROM journal_entries 
+        WHERE agent_id = ? AND timestamp >= ?
+        GROUP BY DATE(timestamp)
+      )
+    `).bind(agentId, weekAgo).first<{avg_daily: number, max_daily: number, days_with_activity: number}>();
+
+    // Check for activity spike (>3x baseline)
+    if (baselineStats?.avg_daily && recentStats?.avg_daily) {
+      const ratio = recentStats.avg_daily / baselineStats.avg_daily;
+      if (ratio > 3) {
+        anomalies.push({
+          type: 'activity_spike',
+          severity: 'warning',
+          description: `Activity increased ${ratio.toFixed(1)}x from baseline (${baselineStats.avg_daily.toFixed(1)} → ${recentStats.avg_daily.toFixed(1)} entries/day)`,
+          data: { baseline: baselineStats.avg_daily, recent: recentStats.avg_daily, ratio }
+        });
+      }
+    }
+
+    // Check for activity drop (>50% decrease)
+    if (baselineStats?.avg_daily && recentStats?.avg_daily) {
+      const ratio = recentStats.avg_daily / baselineStats.avg_daily;
+      if (ratio < 0.5 && baselineStats.avg_daily > 5) {
+        anomalies.push({
+          type: 'activity_drop',
+          severity: 'info',
+          description: `Activity decreased to ${(ratio * 100).toFixed(0)}% of baseline`,
+          data: { baseline: baselineStats.avg_daily, recent: recentStats.avg_daily, ratio }
+        });
+      }
+    }
+
+    // Check for new action types (actions in last 7 days not seen before)
+    const { results: newActions } = await db.prepare(`
+      SELECT DISTINCT action FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+      AND action NOT IN (
+        SELECT DISTINCT action FROM journal_entries 
+        WHERE agent_id = ? AND timestamp < ?
+      )
+    `).bind(agentId, weekAgo, agentId, weekAgo).all<{action: string}>();
+
+    if (newActions?.length) {
+      anomalies.push({
+        type: 'new_behavior',
+        severity: 'info',
+        description: `Started ${newActions.length} new action type(s): ${newActions.map(a => a.action).join(', ')}`,
+        data: { actions: newActions.map(a => a.action) }
+      });
+    }
+
+    // Check for unusual target types
+    const { results: newTargetTypes } = await db.prepare(`
+      SELECT DISTINCT target_type FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+      AND target_type NOT IN (
+        SELECT DISTINCT target_type FROM journal_entries 
+        WHERE agent_id = ? AND timestamp < ?
+      )
+    `).bind(agentId, weekAgo, agentId, weekAgo).all<{target_type: string}>();
+
+    if (newTargetTypes?.length) {
+      anomalies.push({
+        type: 'new_targets',
+        severity: 'info',
+        description: `Started interacting with ${newTargetTypes.length} new target type(s): ${newTargetTypes.map(t => t.target_type).join(', ')}`,
+        data: { targetTypes: newTargetTypes.map(t => t.target_type) }
+      });
+    }
+
+    // Check for burst activity (>10 entries in 1 hour)
+    const { results: bursts } = await db.prepare(`
+      SELECT 
+        strftime('%Y-%m-%d %H:00', timestamp) as hour,
+        COUNT(*) as count
+      FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+      GROUP BY hour
+      HAVING count > 10
+      ORDER BY count DESC
+      LIMIT 3
+    `).bind(agentId, weekAgo).all<{hour: string, count: number}>();
+
+    if (bursts?.length) {
+      anomalies.push({
+        type: 'burst_activity',
+        severity: 'info',
+        description: `${bursts.length} hour(s) with burst activity (>10 entries): ${bursts.map(b => `${b.hour} (${b.count})`).join(', ')}`,
+        data: { bursts }
+      });
+    }
+
+    // Check for long silence (no activity in 7+ days when usually active)
+    if (recentStats?.days_with_activity === 0 && (baselineStats?.days_with_activity || 0) >= 14) {
+      anomalies.push({
+        type: 'silence',
+        severity: 'warning',
+        description: 'No activity in the last 7 days (usually active)',
+        data: { baselineActiveDays: baselineStats?.days_with_activity }
+      });
+    }
+
+    console.log(`[agents] Anomalies for ${agent.name}: ${anomalies.length} found`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      anomalies,
+      summary: anomalies.length === 0 
+        ? 'No anomalies detected' 
+        : `${anomalies.filter(a => a.severity === 'warning').length} warning(s), ${anomalies.filter(a => a.severity === 'info').length} info`,
+      meta: {
+        baselinePeriod: `${monthAgo} to ${weekAgo}`,
+        recentPeriod: `${weekAgo} to now`,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error detecting anomalies:', err);
+    return c.json({ error: 'Failed to detect anomalies' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
