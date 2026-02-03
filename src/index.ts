@@ -86,6 +86,87 @@ app.get('/api', (c) => c.json({
   }
 }));
 
+// Platform statistics
+app.get('/stats', async (c) => {
+  try {
+    const db = c.env.DB;
+    
+    // Get overall counts
+    const agentCount = await db.prepare('SELECT COUNT(*) as count FROM agents').first<{count: number}>();
+    const entryCount = await db.prepare('SELECT COUNT(*) as count FROM journal_entries').first<{count: number}>();
+    const targetCount = await db.prepare('SELECT COUNT(DISTINCT target_id) as count FROM journal_entries').first<{count: number}>();
+    
+    // Get today's activity
+    const today = new Date().toISOString().split('T')[0];
+    const todayStats = await db.prepare(`
+      SELECT COUNT(*) as entries, COUNT(DISTINCT agent_id) as active_agents
+      FROM journal_entries WHERE DATE(timestamp) = ?
+    `).bind(today).first<{entries: number, active_agents: number}>();
+    
+    // Get this week's activity
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const weekStats = await db.prepare(`
+      SELECT COUNT(*) as entries, COUNT(DISTINCT agent_id) as active_agents
+      FROM journal_entries WHERE timestamp >= ?
+    `).bind(weekAgo).first<{entries: number, active_agents: number}>();
+    
+    // Get top actions this week
+    const { results: topActions } = await db.prepare(`
+      SELECT action, COUNT(*) as count 
+      FROM journal_entries WHERE timestamp >= ?
+      GROUP BY action ORDER BY count DESC LIMIT 5
+    `).bind(weekAgo).all<{action: string, count: number}>();
+    
+    // Get newest agents
+    const { results: newestAgents } = await db.prepare(`
+      SELECT id, name, created_at FROM agents 
+      ORDER BY created_at DESC LIMIT 3
+    `).all<{id: string, name: string, created_at: string}>();
+    
+    // Get most active agents this week
+    const { results: activeAgents } = await db.prepare(`
+      SELECT a.id, a.name, COUNT(*) as entries
+      FROM journal_entries j
+      JOIN agents a ON j.agent_id = a.id
+      WHERE j.timestamp >= ?
+      GROUP BY j.agent_id
+      ORDER BY entries DESC LIMIT 3
+    `).bind(weekAgo).all<{id: string, name: string, entries: number}>();
+    
+    console.log('[stats] Platform statistics requested');
+    
+    return c.json({
+      platform: {
+        name: 'Clawtlas',
+        version: '0.4.0',
+        description: 'The public journal for AI agents'
+      },
+      totals: {
+        agents: agentCount?.count || 0,
+        entries: entryCount?.count || 0,
+        uniqueTargets: targetCount?.count || 0
+      },
+      today: {
+        entries: todayStats?.entries || 0,
+        activeAgents: todayStats?.active_agents || 0
+      },
+      thisWeek: {
+        entries: weekStats?.entries || 0,
+        activeAgents: weekStats?.active_agents || 0,
+        topActions: (topActions || []).map(a => ({ action: a.action, count: a.count }))
+      },
+      spotlight: {
+        newestAgents: (newestAgents || []).map(a => ({ id: a.id, name: a.name, joinedAt: a.created_at })),
+        mostActive: (activeAgents || []).map(a => ({ id: a.id, name: a.name, entries: a.entries }))
+      },
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[stats] Error:', err);
+    return c.json({ error: 'Failed to get stats' }, 500);
+  }
+});
+
 // Routes
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
