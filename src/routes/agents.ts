@@ -1447,6 +1447,120 @@ agentRoutes.get('/:id/timeline', async (c) => {
   }
 });
 
+// Find similar agents (based on behavioral patterns)
+agentRoutes.get('/:id/similar', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const limit = Math.min(parseInt(c.req.query('limit') || '10'), 20);
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get this agent's action distribution
+    const { results: myActions } = await db.prepare(`
+      SELECT action, COUNT(*) as count FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+      GROUP BY action
+    `).bind(agentId, since).all<{action: string, count: number}>();
+
+    if (!myActions?.length) {
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        similar: [],
+        message: 'Not enough activity to find similar agents'
+      });
+    }
+
+    // Calculate my distribution
+    const myTotal = myActions.reduce((sum, a) => sum + a.count, 0);
+    const myDist: Record<string, number> = {};
+    myActions.forEach(a => { myDist[a.action] = a.count / myTotal; });
+
+    // Get all other agents with activity
+    const { results: otherAgents } = await db.prepare(`
+      SELECT DISTINCT agent_id FROM journal_entries 
+      WHERE agent_id != ? AND timestamp >= ?
+    `).bind(agentId, since).all<{agent_id: string}>();
+
+    // Calculate similarity for each
+    const similarities: Array<{id: string, similarity: number}> = [];
+    
+    for (const other of (otherAgents || [])) {
+      const { results: theirActions } = await db.prepare(`
+        SELECT action, COUNT(*) as count FROM journal_entries 
+        WHERE agent_id = ? AND timestamp >= ?
+        GROUP BY action
+      `).bind(other.agent_id, since).all<{action: string, count: number}>();
+
+      if (!theirActions?.length) continue;
+
+      const theirTotal = theirActions.reduce((sum, a) => sum + a.count, 0);
+      const theirDist: Record<string, number> = {};
+      theirActions.forEach(a => { theirDist[a.action] = a.count / theirTotal; });
+
+      // Cosine similarity
+      const allKeys = new Set([...Object.keys(myDist), ...Object.keys(theirDist)]);
+      let dot = 0, mag1 = 0, mag2 = 0;
+      allKeys.forEach(k => {
+        const v1 = myDist[k] || 0;
+        const v2 = theirDist[k] || 0;
+        dot += v1 * v2;
+        mag1 += v1 * v1;
+        mag2 += v2 * v2;
+      });
+      const similarity = mag1 > 0 && mag2 > 0 ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
+      
+      similarities.push({ id: other.agent_id, similarity });
+    }
+
+    // Sort by similarity and take top N
+    similarities.sort((a, b) => b.similarity - a.similarity);
+    const topSimilar = similarities.slice(0, limit);
+
+    // Get agent names
+    if (topSimilar.length > 0) {
+      const ids = topSimilar.map(s => s.id);
+      const placeholders = ids.map(() => '?').join(',');
+      const { results: names } = await db.prepare(
+        `SELECT id, name FROM agents WHERE id IN (${placeholders})`
+      ).bind(...ids).all<{id: string, name: string}>();
+      
+      const nameMap = new Map((names || []).map(n => [n.id, n.name]));
+      
+      console.log(`[agents] Similar to ${agent.name}: found ${topSimilar.length}`);
+
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        similar: topSimilar.map(s => ({
+          agentId: s.id,
+          agentName: nameMap.get(s.id) || null,
+          similarity: Math.round(s.similarity * 100) / 100,
+          match: s.similarity > 0.8 ? 'high' : s.similarity > 0.5 ? 'moderate' : 'low'
+        })),
+        meta: {
+          totalCandidates: otherAgents?.length || 0,
+          since,
+          generatedAt: new Date().toISOString()
+        }
+      });
+    }
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      similar: [],
+      meta: { totalCandidates: 0, since, generatedAt: new Date().toISOString() }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error finding similar:', err);
+    return c.json({ error: 'Failed to find similar agents' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
