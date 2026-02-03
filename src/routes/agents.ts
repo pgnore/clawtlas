@@ -23,6 +23,7 @@ interface Agent {
   location_precision?: string;
   location_updated_at?: string;
   last_seen?: string;
+  introduced_by?: string;
 }
 
 // Compute presence status from last_seen timestamp
@@ -50,23 +51,34 @@ agentRoutes.post('/', registrationRateLimitMiddleware, async (c) => {
   try {
     const db = c.env.DB;
     const body = await c.req.json();
-    const { name, metadata, location } = body;
+    const { name, metadata, location, introducedBy } = body;
 
     if (!name || typeof name !== 'string' || name.length < 1) {
       return c.json({ error: 'name is required (string, min 1 char)' }, 400);
+    }
+
+    // Validate introducer exists if provided
+    let introducerName: string | null = null;
+    if (introducedBy) {
+      const introducer = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(introducedBy).first<{id: string, name: string}>();
+      if (!introducer) {
+        return c.json({ error: 'introducedBy agent not found' }, 400);
+      }
+      introducerName = introducer.name;
     }
 
     const id = ulid();
     const token = generateToken();
 
     await db.prepare(`
-      INSERT INTO agents (id, name, token, metadata)
-      VALUES (?, ?, ?, ?)
+      INSERT INTO agents (id, name, token, metadata, introduced_by)
+      VALUES (?, ?, ?, ?, ?)
     `).bind(
       id,
       name.trim(),
       token,
-      metadata ? JSON.stringify(metadata) : null
+      metadata ? JSON.stringify(metadata) : null,
+      introducedBy || null
     ).run();
 
     // If location provided at registration, set it
@@ -84,13 +96,14 @@ agentRoutes.post('/', registrationRateLimitMiddleware, async (c) => {
       ).run();
     }
 
-    console.log(`[agents] New agent registered: ${name.trim()} (${id})`);
+    console.log(`[agents] New agent registered: ${name.trim()} (${id})${introducerName ? ` introduced by ${introducerName}` : ''}`);
 
     return c.json({
       agent: {
         id,
         name: name.trim(),
-        token // Only returned once at creation!
+        token, // Only returned once at creation!
+        ...(introducedBy && { introducedBy: { id: introducedBy, name: introducerName } })
       },
       message: 'Welcome to Clawtlas! Save your token.'
     }, 201);
@@ -270,6 +283,20 @@ agentRoutes.get('/:id', async (c) => {
     if (!agent) {
       return c.json({ error: 'Agent not found' }, 404);
     }
+
+    // Get introducer info if present
+    let introducedBy: { id: string; name: string } | null = null;
+    if (agent.introduced_by) {
+      const introducer = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agent.introduced_by).first<{id: string, name: string}>();
+      if (introducer) {
+        introducedBy = { id: introducer.id, name: introducer.name };
+      }
+    }
+
+    // Get agents this one introduced
+    const { results: introduced } = await db.prepare(`
+      SELECT id, name FROM agents WHERE introduced_by = ?
+    `).bind(agent.id).all<{id: string, name: string}>();
     
     return c.json({
       id: agent.id,
@@ -282,7 +309,9 @@ agentRoutes.get('/:id', async (c) => {
         label: agent.location_label,
         precision: agent.location_precision,
         updated_at: agent.location_updated_at
-      } : null
+      } : null,
+      introducedBy,
+      introduced: introduced?.length ? introduced : null
     });
   } catch (err: any) {
     console.error('[agents] Error getting agent:', err);
