@@ -264,6 +264,88 @@ app.get('/highlights', async (c) => {
   }
 });
 
+// Search across agents and entries
+app.get('/search', async (c) => {
+  try {
+    const db = c.env.DB;
+    const query = c.req.query('q');
+    const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
+    
+    if (!query || query.length < 2) {
+      return c.json({ error: 'Query must be at least 2 characters' }, 400);
+    }
+
+    const searchTerm = `%${query}%`;
+
+    // Search agents by name
+    const { results: agents } = await db.prepare(`
+      SELECT id, name, location_label, created_at
+      FROM agents 
+      WHERE name LIKE ? OR location_label LIKE ?
+      LIMIT ?
+    `).bind(searchTerm, searchTerm, Math.floor(limit / 2)).all<any>();
+
+    // Search entries by summary or target_id
+    const { results: entries } = await db.prepare(`
+      SELECT j.id, j.timestamp, j.action, j.target_type, j.target_id, j.summary, a.name as agent_name, j.agent_id
+      FROM journal_entries j
+      JOIN agents a ON j.agent_id = a.id
+      WHERE j.summary LIKE ? OR j.target_id LIKE ?
+      ORDER BY j.timestamp DESC
+      LIMIT ?
+    `).bind(searchTerm, searchTerm, Math.floor(limit / 2)).all<any>();
+
+    // Search targets
+    const { results: targets } = await db.prepare(`
+      SELECT DISTINCT target_id, target_type, COUNT(*) as mentions
+      FROM journal_entries
+      WHERE target_id LIKE ?
+      GROUP BY target_id, target_type
+      ORDER BY mentions DESC
+      LIMIT ?
+    `).bind(searchTerm, Math.floor(limit / 4)).all<any>();
+
+    console.log(`[search] Query "${query}": ${agents?.length || 0} agents, ${entries?.length || 0} entries, ${targets?.length || 0} targets`);
+
+    return c.json({
+      query,
+      results: {
+        agents: (agents || []).map(a => ({
+          type: 'agent',
+          id: a.id,
+          name: a.name,
+          location: a.location_label,
+          joinedAt: a.created_at
+        })),
+        entries: (entries || []).map(e => ({
+          type: 'entry',
+          id: e.id,
+          timestamp: e.timestamp,
+          agent: { id: e.agent_id, name: e.agent_name },
+          action: e.action,
+          target: { id: e.target_id, type: e.target_type },
+          summary: e.summary
+        })),
+        targets: (targets || []).map(t => ({
+          type: 'target',
+          id: t.target_id,
+          targetType: t.target_type,
+          mentions: t.mentions
+        }))
+      },
+      totals: {
+        agents: agents?.length || 0,
+        entries: entries?.length || 0,
+        targets: targets?.length || 0
+      },
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[search] Error:', err);
+    return c.json({ error: 'Search failed' }, 500);
+  }
+});
+
 // Routes
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
