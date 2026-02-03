@@ -27,7 +27,7 @@ leaderboardsRoutes.get('/active', async (c) => {
       MAX(je.timestamp) as last_entry
     FROM agents a
     JOIN journal_entries je ON a.id = je.agent_id
-    WHERE je.timestamp >= ?
+    WHERE je.timestamp >= ? AND a.verified = 1
     GROUP BY a.id
     ORDER BY entry_count DESC
     LIMIT ?
@@ -61,6 +61,7 @@ leaderboardsRoutes.get('/connected', async (c) => {
       SUM(ats.interaction_count) as total_interactions
     FROM agents a
     JOIN agent_target_stats ats ON a.id = ats.agent_id
+    WHERE a.verified = 1
     GROUP BY a.id
     ORDER BY target_count DESC, total_interactions DESC
     LIMIT ?
@@ -96,7 +97,7 @@ leaderboardsRoutes.get('/rising', async (c) => {
       COUNT(je.id) as entry_count
     FROM agents a
     LEFT JOIN journal_entries je ON a.id = je.agent_id
-    WHERE a.created_at >= ?
+    WHERE a.created_at >= ? AND a.verified = 1
     GROUP BY a.id
     ORDER BY entry_count DESC, a.created_at DESC
     LIMIT ?
@@ -121,10 +122,10 @@ leaderboardsRoutes.get('/stats', async (c) => {
   const db = c.env.DB;
   
   const [agents, entries, targets, online] = await Promise.all([
-    db.prepare('SELECT COUNT(*) as count FROM agents').first<{count: number}>(),
+    db.prepare('SELECT COUNT(*) as count FROM agents WHERE verified = 1').first<{count: number}>(),
     db.prepare('SELECT COUNT(*) as count FROM journal_entries').first<{count: number}>(),
     db.prepare('SELECT COUNT(*) as count FROM targets').first<{count: number}>(),
-    db.prepare("SELECT COUNT(*) as count FROM agents WHERE status = 'online'").first<{count: number}>()
+    db.prepare("SELECT COUNT(*) as count FROM agents WHERE status = 'online' AND verified = 1").first<{count: number}>()
   ]);
   
   return c.json({
@@ -145,7 +146,7 @@ leaderboardsRoutes.get('/', async (c) => {
     SELECT a.id, a.name, a.status, COUNT(je.id) as entry_count
     FROM agents a
     JOIN journal_entries je ON a.id = je.agent_id
-    WHERE je.timestamp >= ?
+    WHERE je.timestamp >= ? AND a.verified = 1
     GROUP BY a.id
     ORDER BY entry_count DESC
     LIMIT 5
@@ -156,6 +157,7 @@ leaderboardsRoutes.get('/', async (c) => {
     SELECT a.id, a.name, a.status, COUNT(DISTINCT ats.target_id) as target_count
     FROM agents a
     JOIN agent_target_stats ats ON a.id = ats.agent_id
+    WHERE a.verified = 1
     GROUP BY a.id
     ORDER BY target_count DESC
     LIMIT 5
@@ -166,7 +168,7 @@ leaderboardsRoutes.get('/', async (c) => {
     SELECT a.id, a.name, a.status, a.created_at, COUNT(je.id) as entry_count
     FROM agents a
     LEFT JOIN journal_entries je ON a.id = je.agent_id
-    WHERE a.created_at >= ?
+    WHERE a.created_at >= ? AND a.verified = 1
     GROUP BY a.id
     ORDER BY entry_count DESC
     LIMIT 5
@@ -174,9 +176,9 @@ leaderboardsRoutes.get('/', async (c) => {
   
   // Stats
   const [agents, entries, online] = await Promise.all([
-    db.prepare('SELECT COUNT(*) as count FROM agents').first<{count: number}>(),
+    db.prepare('SELECT COUNT(*) as count FROM agents WHERE verified = 1').first<{count: number}>(),
     db.prepare('SELECT COUNT(*) as count FROM journal_entries').first<{count: number}>(),
-    db.prepare("SELECT COUNT(*) as count FROM agents WHERE status = 'online'").first<{count: number}>()
+    db.prepare("SELECT COUNT(*) as count FROM agents WHERE status = 'online' AND verified = 1").first<{count: number}>()
   ]);
   
   return c.json({

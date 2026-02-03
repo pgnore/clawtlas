@@ -200,9 +200,11 @@ agentRoutes.patch('/me', async (c) => {
 agentRoutes.get('/', async (c) => {
   try {
     const db = c.env.DB;
+    // Only show verified agents (those who have posted at least one journal entry)
     const { results: agents } = await db.prepare(`
       SELECT id, name, created_at, metadata, location_lat, location_lng, location_label, location_precision, last_seen
       FROM agents
+      WHERE verified = 1
       ORDER BY 
         CASE WHEN last_seen IS NOT NULL THEN 0 ELSE 1 END,
         last_seen DESC
@@ -346,6 +348,206 @@ agentRoutes.patch('/me/location', async (c) => {
   } catch (err: any) {
     console.error('[agents] Error updating location:', err);
     return c.json({ error: 'Failed to update location' }, 500);
+  }
+});
+
+// Get agent relationships (agent-to-agent connections)
+// This is the core of the social graph
+agentRoutes.get('/:id/relationships', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const since = c.req.query('since') || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString(); // 90 days default
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get outgoing connections (this agent → other agents)
+    const { results: outgoing } = await db.prepare(`
+      SELECT 
+        target_id,
+        COUNT(*) as interaction_count,
+        MAX(timestamp) as last_interaction,
+        MIN(timestamp) as first_interaction
+      FROM journal_entries 
+      WHERE agent_id = ? 
+        AND target_type = 'agent'
+        AND timestamp >= ?
+      GROUP BY target_id
+    `).bind(agentId, since).all<{
+      target_id: string;
+      interaction_count: number;
+      last_interaction: string;
+      first_interaction: string;
+    }>();
+
+    // Get incoming connections (other agents → this agent)
+    const { results: incoming } = await db.prepare(`
+      SELECT 
+        agent_id as source_id,
+        COUNT(*) as interaction_count,
+        MAX(timestamp) as last_interaction,
+        MIN(timestamp) as first_interaction
+      FROM journal_entries 
+      WHERE target_type = 'agent' 
+        AND target_id = ?
+        AND timestamp >= ?
+      GROUP BY agent_id
+    `).bind(agentId, since).all<{
+      source_id: string;
+      interaction_count: number;
+      last_interaction: string;
+      first_interaction: string;
+    }>();
+
+    // Build relationship map
+    const relationshipMap = new Map<string, {
+      agentId: string;
+      agentName?: string;
+      outgoing: number;
+      incoming: number;
+      totalInteractions: number;
+      lastInteraction: string;
+      firstInteraction: string;
+      mutual: boolean;
+      strength: number;
+    }>();
+
+    // Process outgoing
+    for (const out of outgoing || []) {
+      relationshipMap.set(out.target_id, {
+        agentId: out.target_id,
+        outgoing: out.interaction_count,
+        incoming: 0,
+        totalInteractions: out.interaction_count,
+        lastInteraction: out.last_interaction,
+        firstInteraction: out.first_interaction,
+        mutual: false,
+        strength: 0
+      });
+    }
+
+    // Process incoming and merge
+    for (const inc of incoming || []) {
+      const existing = relationshipMap.get(inc.source_id);
+      if (existing) {
+        existing.incoming = inc.interaction_count;
+        existing.totalInteractions += inc.interaction_count;
+        existing.mutual = true; // Both directions exist!
+        if (inc.last_interaction > existing.lastInteraction) {
+          existing.lastInteraction = inc.last_interaction;
+        }
+        if (inc.first_interaction < existing.firstInteraction) {
+          existing.firstInteraction = inc.first_interaction;
+        }
+      } else {
+        relationshipMap.set(inc.source_id, {
+          agentId: inc.source_id,
+          outgoing: 0,
+          incoming: inc.interaction_count,
+          totalInteractions: inc.interaction_count,
+          lastInteraction: inc.last_interaction,
+          firstInteraction: inc.first_interaction,
+          mutual: false,
+          strength: 0
+        });
+      }
+    }
+
+    // Calculate relationship strength (recency + frequency + reciprocity)
+    const now = Date.now();
+    const DECAY_HALF_LIFE_DAYS = 14; // 2 weeks
+    const DECAY_LAMBDA = Math.log(2) / (DECAY_HALF_LIFE_DAYS * 24);
+
+    for (const rel of relationshipMap.values()) {
+      const lastTime = new Date(rel.lastInteraction).getTime();
+      const hoursAgo = (now - lastTime) / (1000 * 60 * 60);
+      const recencyFactor = Math.exp(-DECAY_LAMBDA * hoursAgo);
+      
+      // Frequency factor (log scale, caps at ~10 interactions for max effect)
+      const frequencyFactor = Math.min(1, Math.log10(rel.totalInteractions + 1) / Math.log10(11));
+      
+      // Reciprocity bonus (mutual relationships are stronger)
+      const reciprocityBonus = rel.mutual ? 1.5 : 1;
+      
+      // Balance bonus (relationships where both sides contribute equally)
+      const balanceFactor = rel.mutual 
+        ? 1 - Math.abs(rel.outgoing - rel.incoming) / (rel.outgoing + rel.incoming)
+        : 0.5;
+      
+      rel.strength = Math.round(
+        (recencyFactor * 0.3 + frequencyFactor * 0.4 + balanceFactor * 0.3) 
+        * reciprocityBonus 
+        * 100
+      ) / 100;
+    }
+
+    // Get agent names for all related agents
+    const relatedIds = [...relationshipMap.keys()];
+    if (relatedIds.length > 0) {
+      const placeholders = relatedIds.map(() => '?').join(',');
+      const { results: relatedAgents } = await db.prepare(
+        `SELECT id, name FROM agents WHERE id IN (${placeholders})`
+      ).bind(...relatedIds).all<{id: string, name: string}>();
+      
+      for (const ra of relatedAgents || []) {
+        const rel = relationshipMap.get(ra.id);
+        if (rel) rel.agentName = ra.name;
+      }
+    }
+
+    // Convert to sorted array
+    const relationships = [...relationshipMap.values()]
+      .sort((a, b) => b.strength - a.strength);
+
+    // Separate mutual from one-way
+    const mutual = relationships.filter(r => r.mutual);
+    const outgoingOnly = relationships.filter(r => !r.mutual && r.outgoing > 0);
+    const incomingOnly = relationships.filter(r => !r.mutual && r.incoming > 0);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      stats: {
+        totalRelationships: relationships.length,
+        mutualConnections: mutual.length,
+        outgoingOnly: outgoingOnly.length,
+        incomingOnly: incomingOnly.length
+      },
+      relationships: {
+        mutual: mutual.map(r => ({
+          agent: { id: r.agentId, name: r.agentName },
+          interactions: { outgoing: r.outgoing, incoming: r.incoming, total: r.totalInteractions },
+          strength: r.strength,
+          firstInteraction: r.firstInteraction,
+          lastInteraction: r.lastInteraction
+        })),
+        outgoing: outgoingOnly.map(r => ({
+          agent: { id: r.agentId, name: r.agentName },
+          interactions: r.outgoing,
+          strength: r.strength,
+          firstInteraction: r.firstInteraction,
+          lastInteraction: r.lastInteraction
+        })),
+        incoming: incomingOnly.map(r => ({
+          agent: { id: r.agentId, name: r.agentName },
+          interactions: r.incoming,
+          strength: r.strength,
+          firstInteraction: r.firstInteraction,
+          lastInteraction: r.lastInteraction
+        }))
+      },
+      meta: {
+        since,
+        generatedAt: new Date().toISOString(),
+        decayHalfLife: `${DECAY_HALF_LIFE_DAYS} days`
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting relationships:', err);
+    return c.json({ error: 'Failed to get relationships' }, 500);
   }
 });
 

@@ -173,6 +173,23 @@ journalRoutes.post('/', journalRateLimitMiddleware, requireAuth, async (c) => {
     // Update agent presence
     await db.prepare('UPDATE agents SET last_seen = datetime(\'now\') WHERE id = ?').bind(agent.id).run();
 
+    // Auto-verify agent on first journal entry
+    const agentData = await db.prepare('SELECT verified, first_journal_at FROM agents WHERE id = ?')
+      .bind(agent.id)
+      .first<{ verified: number; first_journal_at: string | null }>();
+    
+    if (agentData && !agentData.verified && !agentData.first_journal_at) {
+      await db.prepare(`
+        UPDATE agents 
+        SET verified = 1, 
+            first_journal_at = datetime('now'),
+            verification_code = NULL,
+            verification_expires_at = NULL
+        WHERE id = ?
+      `).bind(agent.id).run();
+      console.log(`[journal] ✅ Auto-verified agent: ${agent.name} (${agent.id})`);
+    }
+
     console.log(`[journal] ${agent.name} logged: ${action} → ${targetType}:${targetId}`);
 
     return c.json({ id, status: 'created' }, 201);
