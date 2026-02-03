@@ -970,6 +970,132 @@ agentRoutes.get('/compare/:id1/:id2', async (c) => {
   }
 });
 
+// Verify agent identity by comparing recent behavior to historical fingerprint
+agentRoutes.get('/:id/verify', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name, created_at FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string, created_at: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get historical entries (older than 7 days)
+    const weekAgo = new Date(Date.now() - 7 * 24 * 60 * 60 * 1000).toISOString();
+    const monthAgo = new Date(Date.now() - 30 * 24 * 60 * 60 * 1000).toISOString();
+    
+    const { results: historicalEntries } = await db.prepare(`
+      SELECT action, target_type FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ? AND timestamp < ?
+    `).bind(agentId, monthAgo, weekAgo).all<{action: string, target_type: string}>();
+
+    // Get recent entries (last 7 days)
+    const { results: recentEntries } = await db.prepare(`
+      SELECT action, target_type FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+    `).bind(agentId, weekAgo).all<{action: string, target_type: string}>();
+
+    if (!historicalEntries?.length || historicalEntries.length < 5) {
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        verified: null,
+        status: 'insufficient_history',
+        message: 'Not enough historical data to verify (need at least 5 entries older than 7 days)',
+        historicalEntries: historicalEntries?.length || 0,
+        recentEntries: recentEntries?.length || 0
+      });
+    }
+
+    if (!recentEntries?.length) {
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        verified: null,
+        status: 'no_recent_activity',
+        message: 'No recent activity to verify against history',
+        historicalEntries: historicalEntries.length,
+        recentEntries: 0
+      });
+    }
+
+    // Calculate distributions
+    const getDistribution = (entries: any[]) => {
+      const counts: Record<string, number> = {};
+      entries.forEach(e => { counts[e.action] = (counts[e.action] || 0) + 1; });
+      const total = entries.length;
+      const dist: Record<string, number> = {};
+      Object.entries(counts).forEach(([k, v]) => { dist[k] = v / total; });
+      return dist;
+    };
+
+    const getTargetDist = (entries: any[]) => {
+      const counts: Record<string, number> = {};
+      entries.forEach(e => { counts[e.target_type] = (counts[e.target_type] || 0) + 1; });
+      const total = entries.length;
+      const dist: Record<string, number> = {};
+      Object.entries(counts).forEach(([k, v]) => { dist[k] = v / total; });
+      return dist;
+    };
+
+    const historicalActionDist = getDistribution(historicalEntries);
+    const recentActionDist = getDistribution(recentEntries);
+    const historicalTargetDist = getTargetDist(historicalEntries);
+    const recentTargetDist = getTargetDist(recentEntries);
+
+    // Cosine similarity
+    const cosineSimilarity = (d1: Record<string, number>, d2: Record<string, number>) => {
+      const allKeys = new Set([...Object.keys(d1), ...Object.keys(d2)]);
+      let dot = 0, mag1 = 0, mag2 = 0;
+      allKeys.forEach(k => {
+        const v1 = d1[k] || 0;
+        const v2 = d2[k] || 0;
+        dot += v1 * v2;
+        mag1 += v1 * v1;
+        mag2 += v2 * v2;
+      });
+      return mag1 > 0 && mag2 > 0 ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
+    };
+
+    const actionConsistency = cosineSimilarity(historicalActionDist, recentActionDist);
+    const targetConsistency = cosineSimilarity(historicalTargetDist, recentTargetDist);
+    const overallConsistency = (actionConsistency + targetConsistency) / 2;
+
+    // Determine verification result
+    const isVerified = overallConsistency >= 0.5;
+    const confidence = overallConsistency >= 0.8 ? 'high' : 
+                       overallConsistency >= 0.6 ? 'medium' : 
+                       overallConsistency >= 0.4 ? 'low' : 'very_low';
+
+    console.log(`[agents] Verify ${agent.name}: ${isVerified ? 'PASS' : 'FAIL'} (${Math.round(overallConsistency * 100)}% consistency)`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      verified: isVerified,
+      status: isVerified ? 'consistent' : 'inconsistent',
+      confidence,
+      consistency: {
+        overall: Math.round(overallConsistency * 100) / 100,
+        actions: Math.round(actionConsistency * 100) / 100,
+        targets: Math.round(targetConsistency * 100) / 100
+      },
+      interpretation: isVerified 
+        ? `Recent behavior is ${confidence} consistent with historical patterns`
+        : 'Recent behavior differs significantly from historical patterns - possible identity change or compromise',
+      meta: {
+        historicalEntries: historicalEntries.length,
+        recentEntries: recentEntries.length,
+        historicalPeriod: `${monthAgo} to ${weekAgo}`,
+        recentPeriod: `${weekAgo} to now`,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error verifying agent:', err);
+    return c.json({ error: 'Failed to verify agent' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
