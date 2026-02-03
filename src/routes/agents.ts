@@ -849,6 +849,127 @@ agentRoutes.get('/:id/fingerprint', async (c) => {
   }
 });
 
+// Compare two agents' fingerprints
+agentRoutes.get('/compare/:id1/:id2', async (c) => {
+  try {
+    const db = c.env.DB;
+    const id1 = c.req.param('id1');
+    const id2 = c.req.param('id2');
+    const since = c.req.query('since') || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Fetch both agents
+    const [agent1, agent2] = await Promise.all([
+      db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(id1).first<{id: string, name: string}>(),
+      db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(id2).first<{id: string, name: string}>()
+    ]);
+    
+    if (!agent1) return c.json({ error: `Agent ${id1} not found` }, 404);
+    if (!agent2) return c.json({ error: `Agent ${id2} not found` }, 404);
+
+    // Fetch entries for both
+    const [entries1, entries2] = await Promise.all([
+      db.prepare('SELECT action, target_type FROM journal_entries WHERE agent_id = ? AND timestamp >= ?').bind(id1, since).all<{action: string, target_type: string}>(),
+      db.prepare('SELECT action, target_type FROM journal_entries WHERE agent_id = ? AND timestamp >= ?').bind(id2, since).all<{action: string, target_type: string}>()
+    ]);
+
+    if (!entries1.results?.length || !entries2.results?.length) {
+      return c.json({
+        agent1: { id: agent1.id, name: agent1.name },
+        agent2: { id: agent2.id, name: agent2.name },
+        comparison: null,
+        message: 'Not enough data for comparison'
+      });
+    }
+
+    // Calculate action distributions
+    const getDistribution = (entries: any[]) => {
+      const counts: Record<string, number> = {};
+      entries.forEach(e => { counts[e.action] = (counts[e.action] || 0) + 1; });
+      const total = entries.length;
+      const dist: Record<string, number> = {};
+      Object.entries(counts).forEach(([k, v]) => { dist[k] = v / total; });
+      return dist;
+    };
+
+    const getTargetDist = (entries: any[]) => {
+      const counts: Record<string, number> = {};
+      entries.forEach(e => { counts[e.target_type] = (counts[e.target_type] || 0) + 1; });
+      const total = entries.length;
+      const dist: Record<string, number> = {};
+      Object.entries(counts).forEach(([k, v]) => { dist[k] = v / total; });
+      return dist;
+    };
+
+    const actionDist1 = getDistribution(entries1.results);
+    const actionDist2 = getDistribution(entries2.results);
+    const targetDist1 = getTargetDist(entries1.results);
+    const targetDist2 = getTargetDist(entries2.results);
+
+    // Calculate cosine similarity between distributions
+    const cosineSimilarity = (d1: Record<string, number>, d2: Record<string, number>) => {
+      const allKeys = new Set([...Object.keys(d1), ...Object.keys(d2)]);
+      let dot = 0, mag1 = 0, mag2 = 0;
+      allKeys.forEach(k => {
+        const v1 = d1[k] || 0;
+        const v2 = d2[k] || 0;
+        dot += v1 * v2;
+        mag1 += v1 * v1;
+        mag2 += v2 * v2;
+      });
+      return mag1 > 0 && mag2 > 0 ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
+    };
+
+    const actionSimilarity = cosineSimilarity(actionDist1, actionDist2);
+    const targetSimilarity = cosineSimilarity(targetDist1, targetDist2);
+    const overallSimilarity = (actionSimilarity + targetSimilarity) / 2;
+
+    // Check for shared interactions
+    const { results: sharedResult } = await db.prepare(`
+      SELECT COUNT(DISTINCT j1.target_id) as shared_targets
+      FROM journal_entries j1
+      JOIN journal_entries j2 ON j1.target_id = j2.target_id AND j1.target_type = j2.target_type
+      WHERE j1.agent_id = ? AND j2.agent_id = ? AND j1.timestamp >= ? AND j2.timestamp >= ?
+    `).bind(id1, id2, since, since).all<{shared_targets: number}>();
+
+    // Check for direct interactions between them
+    const { results: directResult } = await db.prepare(`
+      SELECT COUNT(*) as direct_interactions
+      FROM journal_entries
+      WHERE (agent_id = ? AND target_type = 'agent' AND target_id = ?)
+         OR (agent_id = ? AND target_type = 'agent' AND target_id = ?)
+    `).bind(id1, id2, id2, id1).all<{direct_interactions: number}>();
+
+    console.log(`[agents] Comparing ${agent1.name} vs ${agent2.name}: similarity ${Math.round(overallSimilarity * 100)}%`);
+
+    return c.json({
+      agent1: { id: agent1.id, name: agent1.name, entryCount: entries1.results.length },
+      agent2: { id: agent2.id, name: agent2.name, entryCount: entries2.results.length },
+      comparison: {
+        similarity: {
+          overall: Math.round(overallSimilarity * 100) / 100,
+          actions: Math.round(actionSimilarity * 100) / 100,
+          targets: Math.round(targetSimilarity * 100) / 100
+        },
+        relationship: {
+          sharedTargets: sharedResult?.[0]?.shared_targets || 0,
+          directInteractions: directResult?.[0]?.direct_interactions || 0,
+          isMutual: (directResult?.[0]?.direct_interactions || 0) >= 2
+        },
+        interpretation: overallSimilarity > 0.8 ? 'Very similar behavior patterns' :
+                       overallSimilarity > 0.5 ? 'Moderately similar' :
+                       overallSimilarity > 0.3 ? 'Some overlap' : 'Different patterns'
+      },
+      meta: {
+        since,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error comparing agents:', err);
+    return c.json({ error: 'Failed to compare agents' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
