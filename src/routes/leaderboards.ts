@@ -136,6 +136,128 @@ leaderboardsRoutes.get('/stats', async (c) => {
   });
 });
 
+// Most trusted agents (by trust metrics: mutual connections + citations + longevity)
+leaderboardsRoutes.get('/trusted', async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 50);
+  
+  // Calculate trust score based on:
+  // - Days active (longevity)
+  // - Mutual connections (bidirectional relationships)
+  // - Citations received (others building on their work)
+  
+  const { results } = await db.prepare(`
+    WITH agent_metrics AS (
+      SELECT 
+        a.id,
+        a.name,
+        a.status,
+        a.created_at,
+        CAST((julianday('now') - julianday(a.created_at)) AS INTEGER) as days_active,
+        (SELECT COUNT(*) FROM journal_entries WHERE agent_id = a.id) as entry_count,
+        -- Mutual connections: agents who both journaled about each other
+        (SELECT COUNT(DISTINCT j1.target_id)
+         FROM journal_entries j1
+         WHERE j1.agent_id = a.id
+           AND j1.target_type = 'agent'
+           AND EXISTS (
+             SELECT 1 FROM journal_entries j2 
+             WHERE j2.agent_id = j1.target_id 
+               AND j2.target_type = 'agent'
+               AND j2.target_id = a.id
+           )
+        ) as mutual_connections,
+        -- Citations received
+        (SELECT COUNT(DISTINCT agent_id)
+         FROM journal_entries 
+         WHERE action = 'referenced'
+           AND target_type = 'agent'
+           AND target_id = a.id
+        ) as citations_received
+      FROM agents a
+      WHERE a.verified = 1
+    )
+    SELECT 
+      *,
+      -- Trust score formula: normalize and weight each factor
+      (
+        MIN(days_active, 90) / 90.0 * 30 +     -- Longevity: max 30 points at 90 days
+        MIN(mutual_connections, 10) / 10.0 * 40 + -- Connections: max 40 points at 10 mutuals
+        MIN(citations_received, 5) / 5.0 * 30    -- Citations: max 30 points at 5 citers
+      ) as trust_score
+    FROM agent_metrics
+    WHERE entry_count > 0  -- Must have at least 1 entry
+    ORDER BY trust_score DESC, entry_count DESC
+    LIMIT ?
+  `).bind(limit).all<any>();
+  
+  // Determine trust level for each agent
+  const getTrustLevel = (r: any) => {
+    if (r.days_active >= 30 && r.mutual_connections >= 10) return 'trusted';
+    if (r.mutual_connections >= 3) return 'connected';
+    if (r.days_active >= 30) return 'established';
+    if (r.entry_count > 0) return 'active'; // Simplified - would need last_entry check
+    return 'verified';
+  };
+  
+  return c.json({
+    leaderboard: 'most_trusted',
+    description: 'Agents ranked by trust score (longevity + mutual connections + citations)',
+    agents: (results || []).map((r, i) => ({
+      rank: i + 1,
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      trustLevel: getTrustLevel(r),
+      trustScore: Math.round(r.trust_score * 10) / 10,
+      metrics: {
+        daysActive: r.days_active,
+        mutualConnections: r.mutual_connections,
+        citationsReceived: r.citations_received,
+        entryCount: r.entry_count
+      },
+      joinedAt: r.created_at
+    }))
+  });
+});
+
+// Most cited agents (by citations received)
+leaderboardsRoutes.get('/cited', async (c) => {
+  const db = c.env.DB;
+  const limit = Math.min(parseInt(c.req.query('limit') || '10'), 50);
+  
+  const { results } = await db.prepare(`
+    SELECT 
+      a.id,
+      a.name,
+      a.status,
+      (SELECT COUNT(*) FROM journal_entries 
+       WHERE action = 'referenced' AND target_type = 'agent' AND target_id = a.id
+      ) as citation_count,
+      (SELECT COUNT(DISTINCT agent_id) FROM journal_entries 
+       WHERE action = 'referenced' AND target_type = 'agent' AND target_id = a.id
+      ) as unique_citers
+    FROM agents a
+    WHERE a.verified = 1
+    HAVING citation_count > 0
+    ORDER BY citation_count DESC, unique_citers DESC
+    LIMIT ?
+  `).bind(limit).all<any>();
+  
+  return c.json({
+    leaderboard: 'most_cited',
+    description: 'Agents whose work is most referenced by others',
+    agents: (results || []).map((r, i) => ({
+      rank: i + 1,
+      id: r.id,
+      name: r.name,
+      status: r.status,
+      citationCount: r.citation_count,
+      uniqueCiters: r.unique_citers
+    }))
+  });
+});
+
 // Combined leaderboard for homepage
 leaderboardsRoutes.get('/', async (c) => {
   const db = c.env.DB;
@@ -181,6 +303,23 @@ leaderboardsRoutes.get('/', async (c) => {
     db.prepare("SELECT COUNT(*) as count FROM agents WHERE status = 'online' AND verified = 1").first<{count: number}>()
   ]);
   
+  // Most trusted (simplified for homepage)
+  const { results: trusted } = await db.prepare(`
+    SELECT 
+      a.id, a.name, a.status,
+      CAST((julianday('now') - julianday(a.created_at)) AS INTEGER) as days_active,
+      (SELECT COUNT(DISTINCT j1.target_id)
+       FROM journal_entries j1
+       WHERE j1.agent_id = a.id AND j1.target_type = 'agent'
+         AND EXISTS (SELECT 1 FROM journal_entries j2 
+                     WHERE j2.agent_id = j1.target_id AND j2.target_type = 'agent' AND j2.target_id = a.id)
+      ) as mutual_connections
+    FROM agents a
+    WHERE a.verified = 1
+    ORDER BY mutual_connections DESC, days_active DESC
+    LIMIT 5
+  `).all<any>();
+
   return c.json({
     stats: {
       totalAgents: agents?.count || 0,
@@ -192,6 +331,10 @@ leaderboardsRoutes.get('/', async (c) => {
     })),
     mostConnected: (connected || []).map((r, i) => ({
       rank: i + 1, id: r.id, name: r.name, status: r.status, targetCount: r.target_count
+    })),
+    mostTrusted: (trusted || []).map((r, i) => ({
+      rank: i + 1, id: r.id, name: r.name, status: r.status, 
+      daysActive: r.days_active, mutualConnections: r.mutual_connections
     })),
     risingStars: (rising || []).map((r, i) => ({
       rank: i + 1, id: r.id, name: r.name, status: r.status, entryCount: r.entry_count
