@@ -717,6 +717,138 @@ agentRoutes.get('/:id/citations', async (c) => {
   }
 });
 
+// Get agent behavioral fingerprint (activity patterns)
+agentRoutes.get('/:id/fingerprint', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const since = c.req.query('since') || new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name, created_at FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string, created_at: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get all journal entries for analysis
+    const { results: entries } = await db.prepare(`
+      SELECT timestamp, action, target_type, summary
+      FROM journal_entries 
+      WHERE agent_id = ? AND timestamp >= ?
+      ORDER BY timestamp DESC
+    `).bind(agentId, since).all<{
+      timestamp: string;
+      action: string;
+      target_type: string;
+      summary: string;
+    }>();
+
+    if (!entries || entries.length < 5) {
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        fingerprint: null,
+        message: 'Not enough data for fingerprint (need at least 5 entries)',
+        entryCount: entries?.length || 0
+      });
+    }
+
+    // Analyze timing patterns
+    const hours = entries.map(e => new Date(e.timestamp + 'Z').getUTCHours());
+    const hourCounts = new Array(24).fill(0);
+    hours.forEach(h => hourCounts[h]++);
+    const peakHours = hourCounts
+      .map((count, hour) => ({ hour, count }))
+      .sort((a, b) => b.count - a.count)
+      .slice(0, 4)
+      .filter(h => h.count > 0)
+      .map(h => h.hour);
+    
+    // Infer timezone (peak activity centered around work hours)
+    const avgHour = hours.reduce((sum, h) => sum + h, 0) / hours.length;
+    const inferredOffset = Math.round((14 - avgHour + 24) % 24); // Assume peak ~2pm local
+    
+    // Burstiness: how clustered is the activity?
+    const timestamps = entries.map(e => new Date(e.timestamp + 'Z').getTime());
+    const gaps = timestamps.slice(0, -1).map((t, i) => Math.abs(timestamps[i + 1] - t));
+    const avgGap = gaps.length > 0 ? gaps.reduce((sum, g) => sum + g, 0) / gaps.length : 0;
+    const gapVariance = gaps.length > 0 ? gaps.reduce((sum, g) => sum + Math.pow(g - avgGap, 2), 0) / gaps.length : 0;
+    const burstiness = avgGap > 0 ? Math.min(1, Math.sqrt(gapVariance) / avgGap) : 0;
+
+    // Action distribution
+    const actionCounts: Record<string, number> = {};
+    entries.forEach(e => {
+      actionCounts[e.action] = (actionCounts[e.action] || 0) + 1;
+    });
+    const totalActions = entries.length;
+    const actionDistribution: Record<string, number> = {};
+    Object.entries(actionCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 6) // Top 6 actions
+      .forEach(([action, count]) => {
+        actionDistribution[action] = Math.round(count / totalActions * 100) / 100;
+      });
+
+    // Target type preferences
+    const targetCounts: Record<string, number> = {};
+    entries.forEach(e => {
+      targetCounts[e.target_type] = (targetCounts[e.target_type] || 0) + 1;
+    });
+    const targetPreferences: Record<string, number> = {};
+    Object.entries(targetCounts)
+      .sort((a, b) => b[1] - a[1])
+      .slice(0, 5)
+      .forEach(([type, count]) => {
+        targetPreferences[type] = Math.round(count / totalActions * 100) / 100;
+      });
+
+    // Summary style analysis
+    const summaryLengths = entries.map(e => e.summary?.length || 0);
+    const avgSummaryLength = Math.round(summaryLengths.reduce((sum, l) => sum + l, 0) / summaryLengths.length);
+    const minSummaryLength = Math.min(...summaryLengths);
+    const maxSummaryLength = Math.max(...summaryLengths);
+    
+    // Technical vocabulary score (heuristic: count technical terms)
+    const technicalTerms = ['api', 'deploy', 'commit', 'merge', 'build', 'test', 'debug', 'refactor', 'endpoint', 'database', 'query', 'function', 'class', 'module'];
+    const allSummaries = entries.map(e => e.summary?.toLowerCase() || '').join(' ');
+    const technicalCount = technicalTerms.reduce((count, term) => count + (allSummaries.match(new RegExp(term, 'g'))?.length || 0), 0);
+    const technicalScore = Math.min(1, technicalCount / entries.length);
+
+    // Calculate fingerprint hash (for comparison)
+    const fingerprintData = `${peakHours.join(',')}-${Object.keys(actionDistribution).slice(0, 3).join(',')}-${Object.keys(targetPreferences).slice(0, 3).join(',')}`;
+    const fingerprintHash = btoa(fingerprintData).slice(0, 12);
+
+    console.log(`[agents] Fingerprint for ${agent.name}: ${entries.length} entries analyzed`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      fingerprint: {
+        hash: fingerprintHash,
+        activityPattern: {
+          peakHours,
+          inferredTimezoneOffset: inferredOffset,
+          burstiness: Math.round(burstiness * 100) / 100
+        },
+        actionDistribution,
+        targetPreferences,
+        summaryStyle: {
+          avgLength: avgSummaryLength,
+          minLength: minSummaryLength,
+          maxLength: maxSummaryLength,
+          technicalScore: Math.round(technicalScore * 100) / 100
+        }
+      },
+      meta: {
+        entriesAnalyzed: entries.length,
+        since,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error generating fingerprint:', err);
+    return c.json({ error: 'Failed to generate fingerprint' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
