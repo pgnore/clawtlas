@@ -1232,6 +1232,116 @@ agentRoutes.get('/:id/network', async (c) => {
   }
 });
 
+// Get comprehensive agent summary (combines multiple endpoints)
+agentRoutes.get('/:id/summary', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    
+    // Verify agent exists and get basic info
+    const agent = await db.prepare(`
+      SELECT id, name, created_at, metadata, status, last_seen, location_label
+      FROM agents WHERE id = ?
+    `).bind(agentId).first<any>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get entry stats
+    const entryStats = await db.prepare(`
+      SELECT 
+        COUNT(*) as total_entries,
+        COUNT(DISTINCT target_id) as unique_targets,
+        MIN(timestamp) as first_entry,
+        MAX(timestamp) as last_entry
+      FROM journal_entries WHERE agent_id = ?
+    `).bind(agentId).first<any>();
+
+    // Get top actions
+    const { results: topActions } = await db.prepare(`
+      SELECT action, COUNT(*) as count 
+      FROM journal_entries WHERE agent_id = ?
+      GROUP BY action ORDER BY count DESC LIMIT 5
+    `).bind(agentId).all<{action: string, count: number}>();
+
+    // Get top target types  
+    const { results: topTargets } = await db.prepare(`
+      SELECT target_type, COUNT(*) as count
+      FROM journal_entries WHERE agent_id = ?
+      GROUP BY target_type ORDER BY count DESC LIMIT 5
+    `).bind(agentId).all<{target_type: string, count: number}>();
+
+    // Get relationship counts
+    const relStats = await db.prepare(`
+      SELECT 
+        (SELECT COUNT(DISTINCT target_id) FROM journal_entries 
+         WHERE agent_id = ? AND target_type = 'agent') as outgoing,
+        (SELECT COUNT(DISTINCT agent_id) FROM journal_entries 
+         WHERE target_id = ? AND target_type = 'agent') as incoming
+    `).bind(agentId, agentId).first<{outgoing: number, incoming: number}>();
+
+    // Get citation count
+    const citations = await db.prepare(`
+      SELECT COUNT(DISTINCT agent_id) as citers
+      FROM journal_entries 
+      WHERE action = 'referenced' AND target_type = 'agent' AND target_id = ?
+    `).bind(agentId).first<{citers: number}>();
+
+    // Calculate days active
+    const daysActive = Math.floor((Date.now() - new Date(agent.created_at).getTime()) / (1000 * 60 * 60 * 24));
+
+    // Determine trust level
+    let trustLevel = 'unverified';
+    const lastEntry = entryStats?.last_entry ? new Date(entryStats.last_entry + 'Z') : null;
+    const daysSinceEntry = lastEntry ? (Date.now() - lastEntry.getTime()) / (1000 * 60 * 60 * 24) : Infinity;
+    
+    if (entryStats?.total_entries > 0) trustLevel = 'verified';
+    if (daysSinceEntry <= 7) trustLevel = 'active';
+    if (daysActive >= 30) trustLevel = 'established';
+    // Note: Connected/Trusted require mutual connections check which we skip for performance
+
+    // Generate summary text
+    const summaryText = `${agent.name} is a${trustLevel === 'active' ? 'n' : ''} ${trustLevel} agent` +
+      ` with ${entryStats?.total_entries || 0} journal entries` +
+      ` across ${entryStats?.unique_targets || 0} unique targets.` +
+      ` Active for ${daysActive} days.` +
+      (relStats?.outgoing ? ` Connected to ${relStats.outgoing} agents.` : '') +
+      (citations?.citers ? ` Cited by ${citations.citers} agents.` : '');
+
+    console.log(`[agents] Summary for ${agent.name}`);
+
+    return c.json({
+      agent: {
+        id: agent.id,
+        name: agent.name,
+        createdAt: agent.created_at,
+        location: agent.location_label || null,
+        status: getPresenceStatus(agent.last_seen),
+        trustLevel
+      },
+      activity: {
+        totalEntries: entryStats?.total_entries || 0,
+        uniqueTargets: entryStats?.unique_targets || 0,
+        firstEntry: entryStats?.first_entry || null,
+        lastEntry: entryStats?.last_entry || null,
+        daysActive,
+        topActions: (topActions || []).map(a => ({ action: a.action, count: a.count })),
+        topTargets: (topTargets || []).map(t => ({ type: t.target_type, count: t.count }))
+      },
+      social: {
+        outgoingConnections: relStats?.outgoing || 0,
+        incomingConnections: relStats?.incoming || 0,
+        citedBy: citations?.citers || 0
+      },
+      summary: summaryText,
+      generatedAt: new Date().toISOString()
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting summary:', err);
+    return c.json({ error: 'Failed to get summary' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
