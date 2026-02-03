@@ -580,6 +580,143 @@ agentRoutes.get('/:id/relationships', async (c) => {
   }
 });
 
+// Get agent citations (who builds on whose output)
+// Citations are journal entries with action="referenced" targeting agents
+agentRoutes.get('/:id/citations', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const since = c.req.query('since') || new Date(Date.now() - 180 * 24 * 60 * 60 * 1000).toISOString(); // 180 days default (longer than relationships)
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get citations OF this agent (others referencing this agent's work)
+    const { results: citedBy } = await db.prepare(`
+      SELECT 
+        agent_id,
+        COUNT(*) as citation_count,
+        MAX(timestamp) as last_citation,
+        MIN(timestamp) as first_citation,
+        GROUP_CONCAT(summary, ' | ') as summaries
+      FROM journal_entries 
+      WHERE action = 'referenced'
+        AND target_type = 'agent'
+        AND target_id = ?
+        AND timestamp >= ?
+      GROUP BY agent_id
+      ORDER BY last_citation DESC
+    `).bind(agentId, since).all<{
+      agent_id: string;
+      citation_count: number;
+      last_citation: string;
+      first_citation: string;
+      summaries: string;
+    }>();
+
+    // Get citations BY this agent (this agent referencing others)
+    const { results: citing } = await db.prepare(`
+      SELECT 
+        target_id,
+        COUNT(*) as citation_count,
+        MAX(timestamp) as last_citation,
+        MIN(timestamp) as first_citation,
+        GROUP_CONCAT(summary, ' | ') as summaries
+      FROM journal_entries 
+      WHERE agent_id = ?
+        AND action = 'referenced'
+        AND target_type = 'agent'
+        AND timestamp >= ?
+      GROUP BY target_id
+      ORDER BY last_citation DESC
+    `).bind(agentId, since).all<{
+      target_id: string;
+      citation_count: number;
+      last_citation: string;
+      first_citation: string;
+      summaries: string;
+    }>();
+
+    // Get agent names for all related agents
+    const allAgentIds = [
+      ...(citedBy || []).map(c => c.agent_id),
+      ...(citing || []).map(c => c.target_id)
+    ];
+    
+    const agentNames = new Map<string, string>();
+    if (allAgentIds.length > 0) {
+      const uniqueIds = [...new Set(allAgentIds)];
+      const placeholders = uniqueIds.map(() => '?').join(',');
+      const { results: agents } = await db.prepare(
+        `SELECT id, name FROM agents WHERE id IN (${placeholders})`
+      ).bind(...uniqueIds).all<{id: string, name: string}>();
+      
+      for (const a of agents || []) {
+        agentNames.set(a.id, a.name);
+      }
+    }
+
+    // Calculate citation score (similar to relationship strength but slower decay)
+    const now = Date.now();
+    const CITATION_DECAY_HALF_LIFE_DAYS = 90; // Citations matter longer than interactions
+    const DECAY_LAMBDA = Math.log(2) / (CITATION_DECAY_HALF_LIFE_DAYS * 24);
+
+    const formatCitation = (c: any, isIncoming: boolean) => {
+      const agentKey = isIncoming ? c.agent_id : c.target_id;
+      const lastTime = new Date(c.last_citation).getTime();
+      const hoursAgo = (now - lastTime) / (1000 * 60 * 60);
+      const recencyFactor = Math.exp(-DECAY_LAMBDA * hoursAgo);
+      const frequencyFactor = Math.min(1, Math.log10(c.citation_count + 1) / Math.log10(6)); // Caps at ~5 citations
+      const strength = Math.round((recencyFactor * 0.4 + frequencyFactor * 0.6) * 100) / 100;
+
+      return {
+        agentId: agentKey,
+        agentName: agentNames.get(agentKey) || null,
+        citationCount: c.citation_count,
+        firstCitation: c.first_citation,
+        lastCitation: c.last_citation,
+        strength,
+        contexts: c.summaries?.split(' | ').slice(0, 3) || [] // First 3 summaries as context
+      };
+    };
+
+    const incomingCitations = (citedBy || []).map(c => formatCitation(c, true));
+    const outgoingCitations = (citing || []).map(c => formatCitation(c, false));
+
+    // Calculate aggregate citation score
+    const totalIncomingStrength = incomingCitations.reduce((sum, c) => sum + c.strength, 0);
+    const citationScore = Math.round(Math.min(1, totalIncomingStrength / 3) * 100) / 100; // Normalize to 0-1
+
+    console.log(`[agents] Citations for ${agent.name}: ${incomingCitations.length} incoming, ${outgoingCitations.length} outgoing`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      stats: {
+        totalCitedBy: incomingCitations.length,
+        totalCiting: outgoingCitations.length,
+        totalIncomingCitations: incomingCitations.reduce((sum, c) => sum + c.citationCount, 0),
+        totalOutgoingCitations: outgoingCitations.reduce((sum, c) => sum + c.citationCount, 0),
+        citationScore // How much others build on this agent's work
+      },
+      citations: {
+        incoming: incomingCitations, // Others citing this agent
+        outgoing: outgoingCitations  // This agent citing others
+      },
+      meta: {
+        since,
+        generatedAt: new Date().toISOString(),
+        decayHalfLife: `${CITATION_DECAY_HALF_LIFE_DAYS} days`
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting citations:', err);
+    return c.json({ error: 'Failed to get citations' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
