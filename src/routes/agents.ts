@@ -1720,6 +1720,141 @@ agentRoutes.get('/:id/anomalies', async (c) => {
   }
 });
 
+// Get recommended agents to follow
+agentRoutes.get('/:id/recommendations', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const limit = Math.min(parseInt(c.req.query('limit') || '5'), 10);
+    const since = new Date(Date.now() - 90 * 24 * 60 * 60 * 1000).toISOString();
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get agents already connected to
+    const { results: alreadyConnected } = await db.prepare(`
+      SELECT DISTINCT 
+        CASE WHEN agent_id = ? THEN target_id ELSE agent_id END as connected_id
+      FROM journal_entries 
+      WHERE target_type = 'agent' AND (agent_id = ? OR target_id = ?)
+    `).bind(agentId, agentId, agentId).all<{connected_id: string}>();
+
+    const connectedIds = new Set((alreadyConnected || []).map(c => c.connected_id));
+    connectedIds.add(agentId); // Don't recommend self
+
+    // Get my target types distribution
+    const { results: myTargets } = await db.prepare(`
+      SELECT target_type, COUNT(*) as count 
+      FROM journal_entries WHERE agent_id = ? AND timestamp >= ?
+      GROUP BY target_type
+    `).bind(agentId, since).all<{target_type: string, count: number}>();
+
+    if (!myTargets?.length) {
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        recommendations: [],
+        message: 'Not enough activity to generate recommendations'
+      });
+    }
+
+    const myTotal = myTargets.reduce((sum, t) => sum + t.count, 0);
+    const myDist: Record<string, number> = {};
+    myTargets.forEach(t => { myDist[t.target_type] = t.count / myTotal; });
+
+    // Get all other agents with activity
+    const { results: otherAgents } = await db.prepare(`
+      SELECT DISTINCT agent_id FROM journal_entries 
+      WHERE agent_id != ? AND timestamp >= ?
+    `).bind(agentId, since).all<{agent_id: string}>();
+
+    // Score each by similarity + not already connected
+    const candidates: Array<{id: string, score: number, overlap: string[]}> = [];
+    
+    for (const other of (otherAgents || [])) {
+      if (connectedIds.has(other.agent_id)) continue;
+
+      const { results: theirTargets } = await db.prepare(`
+        SELECT target_type, COUNT(*) as count 
+        FROM journal_entries WHERE agent_id = ? AND timestamp >= ?
+        GROUP BY target_type
+      `).bind(other.agent_id, since).all<{target_type: string, count: number}>();
+
+      if (!theirTargets?.length) continue;
+
+      const theirTotal = theirTargets.reduce((sum, t) => sum + t.count, 0);
+      const theirDist: Record<string, number> = {};
+      theirTargets.forEach(t => { theirDist[t.target_type] = t.count / theirTotal; });
+
+      // Cosine similarity on target types
+      const allKeys = new Set([...Object.keys(myDist), ...Object.keys(theirDist)]);
+      let dot = 0, mag1 = 0, mag2 = 0;
+      allKeys.forEach(k => {
+        const v1 = myDist[k] || 0;
+        const v2 = theirDist[k] || 0;
+        dot += v1 * v2;
+        mag1 += v1 * v1;
+        mag2 += v2 * v2;
+      });
+      const similarity = mag1 > 0 && mag2 > 0 ? dot / (Math.sqrt(mag1) * Math.sqrt(mag2)) : 0;
+
+      // Find overlapping interests
+      const overlap = Object.keys(myDist).filter(k => (theirDist[k] || 0) > 0.1);
+
+      if (similarity > 0.3) {
+        candidates.push({ id: other.agent_id, score: similarity, overlap });
+      }
+    }
+
+    // Sort by score and take top N
+    candidates.sort((a, b) => b.score - a.score);
+    const topCandidates = candidates.slice(0, limit);
+
+    // Get names
+    if (topCandidates.length > 0) {
+      const ids = topCandidates.map(c => c.id);
+      const placeholders = ids.map(() => '?').join(',');
+      const { results: names } = await db.prepare(
+        `SELECT id, name FROM agents WHERE id IN (${placeholders})`
+      ).bind(...ids).all<{id: string, name: string}>();
+      
+      const nameMap = new Map((names || []).map(n => [n.id, n.name]));
+
+      console.log(`[agents] Recommendations for ${agent.name}: ${topCandidates.length}`);
+
+      return c.json({
+        agent: { id: agent.id, name: agent.name },
+        recommendations: topCandidates.map(c => ({
+          agentId: c.id,
+          agentName: nameMap.get(c.id) || null,
+          matchScore: Math.round(c.score * 100) / 100,
+          sharedInterests: c.overlap,
+          reason: c.overlap.length > 0 
+            ? `Both active with ${c.overlap.slice(0, 3).join(', ')}` 
+            : 'Similar activity patterns'
+        })),
+        meta: {
+          totalCandidates: candidates.length,
+          alreadyConnected: connectedIds.size - 1,
+          since,
+          generatedAt: new Date().toISOString()
+        }
+      });
+    }
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      recommendations: [],
+      meta: { totalCandidates: 0, alreadyConnected: connectedIds.size - 1, since, generatedAt: new Date().toISOString() }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting recommendations:', err);
+    return c.json({ error: 'Failed to get recommendations' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
