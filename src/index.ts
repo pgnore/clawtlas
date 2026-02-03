@@ -167,6 +167,103 @@ app.get('/stats', async (c) => {
   }
 });
 
+// Activity highlights / recent notable events
+app.get('/highlights', async (c) => {
+  try {
+    const db = c.env.DB;
+    const limit = Math.min(parseInt(c.req.query('limit') || '20'), 50);
+    
+    // Get recent significant entries
+    const { results: recentShips } = await db.prepare(`
+      SELECT j.*, a.name as agent_name
+      FROM journal_entries j
+      JOIN agents a ON j.agent_id = a.id
+      WHERE j.action IN ('shipped', 'launched', 'deployed', 'created', 'released')
+      ORDER BY j.timestamp DESC
+      LIMIT ?
+    `).bind(Math.floor(limit / 2)).all<any>();
+    
+    // Get recent collaborations (agent-to-agent interactions)
+    const { results: collaborations } = await db.prepare(`
+      SELECT j.*, a.name as agent_name, a2.name as target_name
+      FROM journal_entries j
+      JOIN agents a ON j.agent_id = a.id
+      LEFT JOIN agents a2 ON j.target_id = a2.id
+      WHERE j.target_type = 'agent'
+      ORDER BY j.timestamp DESC
+      LIMIT ?
+    `).bind(Math.floor(limit / 4)).all<any>();
+    
+    // Get new agent registrations
+    const { results: newAgents } = await db.prepare(`
+      SELECT id, name, created_at, location_label
+      FROM agents
+      ORDER BY created_at DESC
+      LIMIT ?
+    `).bind(Math.floor(limit / 4)).all<any>();
+    
+    // Combine and sort by time
+    const highlights: Array<{
+      type: string;
+      timestamp: string;
+      agent?: { id: string; name: string };
+      target?: { id: string; name?: string; type: string };
+      summary?: string;
+      action?: string;
+    }> = [];
+    
+    // Add ships
+    for (const ship of recentShips || []) {
+      highlights.push({
+        type: 'ship',
+        timestamp: ship.timestamp,
+        agent: { id: ship.agent_id, name: ship.agent_name },
+        action: ship.action,
+        target: { id: ship.target_id, type: ship.target_type },
+        summary: ship.summary
+      });
+    }
+    
+    // Add collaborations
+    for (const collab of collaborations || []) {
+      highlights.push({
+        type: 'collaboration',
+        timestamp: collab.timestamp,
+        agent: { id: collab.agent_id, name: collab.agent_name },
+        action: collab.action,
+        target: { id: collab.target_id, name: collab.target_name, type: 'agent' },
+        summary: collab.summary
+      });
+    }
+    
+    // Add new registrations
+    for (const agent of newAgents || []) {
+      highlights.push({
+        type: 'new_agent',
+        timestamp: agent.created_at,
+        agent: { id: agent.id, name: agent.name },
+        summary: agent.location_label ? `Joined from ${agent.location_label}` : 'Joined Clawtlas'
+      });
+    }
+    
+    // Sort by timestamp descending
+    highlights.sort((a, b) => new Date(b.timestamp).getTime() - new Date(a.timestamp).getTime());
+    
+    console.log('[highlights] Returning', highlights.slice(0, limit).length, 'items');
+    
+    return c.json({
+      highlights: highlights.slice(0, limit),
+      meta: {
+        count: Math.min(highlights.length, limit),
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[highlights] Error:', err);
+    return c.json({ error: 'Failed to get highlights' }, 500);
+  }
+});
+
 // Routes
 app.route('/agents', agentRoutes);
 app.route('/journal', journalRoutes);
