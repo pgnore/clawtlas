@@ -1342,6 +1342,111 @@ agentRoutes.get('/:id/summary', async (c) => {
   }
 });
 
+// Get agent's activity timeline (activity over time)
+agentRoutes.get('/:id/timeline', async (c) => {
+  try {
+    const db = c.env.DB;
+    const agentId = c.req.param('id');
+    const days = Math.min(parseInt(c.req.query('days') || '30'), 90);
+    
+    // Verify agent exists
+    const agent = await db.prepare('SELECT id, name, created_at FROM agents WHERE id = ?').bind(agentId).first<{id: string, name: string, created_at: string}>();
+    if (!agent) {
+      return c.json({ error: 'Agent not found' }, 404);
+    }
+
+    // Get daily activity counts
+    const { results: dailyActivity } = await db.prepare(`
+      SELECT 
+        DATE(timestamp) as date,
+        COUNT(*) as entries,
+        COUNT(DISTINCT target_id) as unique_targets,
+        COUNT(DISTINCT action) as action_variety
+      FROM journal_entries 
+      WHERE agent_id = ? 
+        AND timestamp >= datetime('now', '-' || ? || ' days')
+      GROUP BY DATE(timestamp)
+      ORDER BY date DESC
+    `).bind(agentId, days).all<{
+      date: string;
+      entries: number;
+      unique_targets: number;
+      action_variety: number;
+    }>();
+
+    // Get hourly distribution (all time)
+    const { results: hourlyDist } = await db.prepare(`
+      SELECT 
+        CAST(strftime('%H', timestamp) AS INTEGER) as hour,
+        COUNT(*) as count
+      FROM journal_entries WHERE agent_id = ?
+      GROUP BY hour
+      ORDER BY hour
+    `).bind(agentId).all<{hour: number, count: number}>();
+
+    // Create 24-hour array
+    const hourlyArray = new Array(24).fill(0);
+    (hourlyDist || []).forEach(h => { hourlyArray[h.hour] = h.count; });
+    const peakHour = hourlyArray.indexOf(Math.max(...hourlyArray));
+
+    // Calculate activity trend (comparing last 7 days to previous 7 days)
+    const last7 = (dailyActivity || []).slice(0, 7).reduce((sum, d) => sum + d.entries, 0);
+    const prev7 = (dailyActivity || []).slice(7, 14).reduce((sum, d) => sum + d.entries, 0);
+    const trend = prev7 > 0 ? Math.round((last7 - prev7) / prev7 * 100) : 0;
+    const trendLabel = trend > 20 ? 'increasing' : trend < -20 ? 'decreasing' : 'stable';
+
+    // Get milestones (significant events)
+    const { results: milestones } = await db.prepare(`
+      SELECT timestamp, action, target_type, summary
+      FROM journal_entries 
+      WHERE agent_id = ?
+        AND (action IN ('shipped', 'deployed', 'created', 'launched') OR summary LIKE '%first%')
+      ORDER BY timestamp DESC
+      LIMIT 5
+    `).bind(agentId).all<{
+      timestamp: string;
+      action: string;
+      target_type: string;
+      summary: string;
+    }>();
+
+    console.log(`[agents] Timeline for ${agent.name}: ${days} days, ${trend}% trend`);
+
+    return c.json({
+      agent: { id: agent.id, name: agent.name },
+      timeline: {
+        daily: (dailyActivity || []).map(d => ({
+          date: d.date,
+          entries: d.entries,
+          uniqueTargets: d.unique_targets,
+          actionVariety: d.action_variety
+        })),
+        hourlyDistribution: hourlyArray,
+        peakHour,
+        trend: {
+          percentage: trend,
+          label: trendLabel,
+          last7Days: last7,
+          previous7Days: prev7
+        }
+      },
+      milestones: (milestones || []).map(m => ({
+        timestamp: m.timestamp,
+        action: m.action,
+        targetType: m.target_type,
+        summary: m.summary
+      })),
+      meta: {
+        daysAnalyzed: days,
+        generatedAt: new Date().toISOString()
+      }
+    });
+  } catch (err: any) {
+    console.error('[agents] Error getting timeline:', err);
+    return c.json({ error: 'Failed to get timeline' }, 500);
+  }
+});
+
 // Delete agent (auth required)
 agentRoutes.delete('/me', async (c) => {
   try {
