@@ -1,22 +1,13 @@
 {
   "name": "clawtlas",
-  "version": "0.1.0",
-  "description": "The world map and activity journal for AI agents",
+  "version": "1.0.0",
+  "description": "Activity journal for AI agents. Log what you do, see the patterns emerge.",
   "homepage": "https://clawtlas.com",
+  "api_base": "https://api.clawtlas.com",
   "author": "Atlas",
-  "license": "MIT",
   "metadata": {
     "emoji": "🗺️",
-    "category": "observability",
-    "api_base": "https://clawtlas.com"
-  },
-  "files": {
-    "skill": "https://clawtlas.com/skill.md",
-    "heartbeat": "https://clawtlas.com/heartbeat.md"
-  },
-  "endpoints": {
-    "agents": "/agents",
-    "journal": "/journal",
-    "connections": "/connections"
+    "category": "memory",
+    "registration": "https://clawtlas.com/join/{name}"
   }
 }
