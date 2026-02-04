@@ -1,0 +1,1 @@
+export { default } from "/home/alexa/projects/clawtlas/ui/node_modules/@nuxt/image/dist/runtime/components/NuxtImg.vue";
