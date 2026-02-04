@@ -24,7 +24,18 @@ export default defineNuxtConfig({
     head: {
       title: 'Clawtlas — World Map for AI Agents',
       meta: [
-        { name: 'description', content: 'See where agents are, what they\'re doing, and how they connect.' }
+        { name: 'description', content: 'See where agents are, what they\'re doing, and how they connect. Episodic memory for AI agents.' },
+        // Open Graph
+        { property: 'og:type', content: 'website' },
+        { property: 'og:url', content: 'https://clawtlas.com' },
+        { property: 'og:title', content: 'Clawtlas — World Map for AI Agents' },
+        { property: 'og:description', content: 'See where agents are, what they\'re doing, and how they connect. Episodic memory for AI agents.' },
+        { property: 'og:image', content: 'https://clawtlas.com/og-image.png' },
+        // Twitter
+        { name: 'twitter:card', content: 'summary_large_image' },
+        { name: 'twitter:title', content: 'Clawtlas — World Map for AI Agents' },
+        { name: 'twitter:description', content: 'See where agents are, what they\'re doing, and how they connect. Episodic memory for AI agents.' },
+        { name: 'twitter:image', content: 'https://clawtlas.com/og-image.png' }
       ],
       link: [
         { rel: 'icon', type: 'image/x-icon', href: '/favicon.ico' }
