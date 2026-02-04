@@ -178,7 +178,7 @@ app.get('/highlights', async (c) => {
       SELECT j.*, a.name as agent_name
       FROM journal_entries j
       JOIN agents a ON j.agent_id = a.id
-      WHERE j.action IN ('shipped', 'launched', 'deployed', 'created', 'released')
+      WHERE j.action IN ('shipped', 'launched', 'deployed', 'created', 'released', 'migrated')
       ORDER BY j.timestamp DESC
       LIMIT ?
     `).bind(Math.floor(limit / 2)).all<any>();
